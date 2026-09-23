@@ -10,6 +10,7 @@ import java.io.IOException;
 import java.net.Socket;
 import java.net.SocketTimeoutException;
 import java.util.Locale;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Pattern;
 
 /** Thread que atende um cliente: le cada requisicao, processa e envia exatamente uma resposta. */
@@ -36,20 +37,47 @@ public class TratadorCliente extends Thread {
         }
     }
 
+    private static final AtomicInteger CONTADOR = new AtomicInteger();
+
     private final Socket socket;
     private final BancoDados banco;
+    private final MonitorServidor monitor;
+    private final String remoto;
 
     public TratadorCliente(Socket socket, BancoDados banco) {
+        this(socket, banco, MonitorServidor.NENHUM);
+    }
+
+    public TratadorCliente(Socket socket, BancoDados banco, MonitorServidor monitor) {
+        super("Cliente-" + CONTADOR.incrementAndGet());
         this.socket = socket;
         this.banco = banco;
+        this.monitor = monitor;
+        this.remoto = socket.getInetAddress().getHostAddress() + ":" + socket.getPort();
+    }
+
+    /** Endereco ip:porta do cliente atendido. */
+    public String getRemoto() {
+        return remoto;
+    }
+
+    /** Fecha a conexao; a thread termina ao perceber o socket fechado. */
+    public void encerrar() {
+        try {
+            socket.close();
+        } catch (IOException ignored) {
+            // A conexao ja estava fechada
+        }
     }
 
     @Override
     public void run() {
-        String remoto = socket.getInetAddress().getHostAddress() + ":" + socket.getPort();
         System.out.println("Nova thread de comunicacao iniciada com cliente: " + remoto);
+        monitor.conexaoAberta(this);
+        String motivo = "Cliente encerrou a conexao";
 
         try (ConexaoJson conexao = new ConexaoJson(socket, "Servidor")) {
+            conexao.setOuvinte((direcao, texto) -> monitor.mensagem(this, direcao, texto));
             socket.setSoTimeout(TIMEOUT_INATIVIDADE_MS);
             while (true) {
                 String linha;
@@ -60,6 +88,7 @@ public class TratadorCliente extends Thread {
                     continue;
                 } catch (SocketTimeoutException e) {
                     System.out.println("Cliente " + remoto + " inativo por 300 s; encerrando a conexao.");
+                    motivo = "Inativo por 300 s";
                     break;
                 }
                 if (linha == null) {
@@ -69,8 +98,10 @@ public class TratadorCliente extends Thread {
             }
         } catch (IOException e) {
             System.err.println("Problema de I/O com o cliente " + remoto + ": " + e.getMessage());
+            motivo = socket.isClosed() ? "Conexao fechada pelo servidor" : "Erro de I/O: " + e.getMessage();
         }
         System.out.println("Conexao encerrada com cliente: " + remoto);
+        monitor.conexaoEncerrada(this, motivo);
     }
 
     /** Processa uma requisicao e devolve a resposta; nunca lanca excecao (protocolo 4.5). */

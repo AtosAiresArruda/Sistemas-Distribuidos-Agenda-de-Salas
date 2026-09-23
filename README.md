@@ -44,8 +44,11 @@ a2666170/
 └── src/
     ├── main/java/br/edu/utfpr/sd/
     │   ├── comum/      ConexaoJson (envio/recebimento e log das mensagens), Json
-    │   ├── servidor/   Servidor, TratadorCliente (uma thread por cliente), BancoDados (SQLite)
-    │   └── cliente/    Cliente (menu de console)
+    │   ├── servidor/   Servidor, TratadorCliente (uma thread por cliente), BancoDados (SQLite),
+    │   │               ServidorApp (interface JavaFX), MonitorServidor
+    │   ├── cliente/    Cliente (menu de console), ClienteApp (interface JavaFX)
+    │   └── gui/        PainelJson (área de JSONs usada pelas duas interfaces)
+    ├── main/resources/ estilo.css das interfaces
     ├── test/java/...   ServidorTest (testes de integração)
     └── servidor_eco_tcp_json/   código base de exemplo da disciplina
 ```
@@ -62,6 +65,33 @@ Todos os comandos abaixo são executados dentro da pasta `a2666170`:
 ```bash
 cd a2666170
 ```
+
+## Interface gráfica (JavaFX)
+
+Cliente e servidor também têm interface gráfica. Ela usa as mesmas classes de rede, então continua exibindo no console todas as mensagens JSON enviadas e recebidas.
+
+```bash
+mvn -q exec:java@servidor-gui
+```
+
+```bash
+mvn -q exec:java@cliente-gui
+```
+
+**Servidor**: digite a porta e clique em *Iniciar servidor*. A tela principal mostra:
+- no topo, o total de threads ativas, de conexões desde o início e de mensagens JSON;
+- a tabela de threads, com cliente (ip:porta), estado, usuário logado, última operação, último status e número de mensagens;
+- a conversa da thread selecionada na tabela;
+- embaixo, a comunicação acumulada de todas as threads.
+
+O botão *Desconectar cliente* fecha a conexão da thread selecionada, e *Remover encerradas* limpa as threads que já terminaram.
+
+**Cliente**: informe IP e porta e clique em *Conectar* (as operações também conectam sozinhas).
+- Aba **Login**: login com email e senha, e cadastro de novo usuário (`register`).
+- Aba **Minha conta**, liberada após o login: `read_user`, `update_user` (campo em branco = não alterar), `delete_user` (pede a senha) e `logout`.
+- À direita fica a área com todos os JSONs enviados e recebidos. O campo *Enviar JSON manual* manda uma linha exatamente como foi digitada.
+
+Ao receber `401`, ou após logout e exclusão, o cliente descarta o token e volta para a aba Login.
 
 ## Testes locais
 

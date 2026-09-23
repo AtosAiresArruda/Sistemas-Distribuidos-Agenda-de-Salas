@@ -1,0 +1,149 @@
+/* Estilo compartilhado pelas interfaces do cliente e do servidor */
+
+.root {
+    -fx-font-size: 13px;
+    -fx-base: #eef1f5;
+    -fx-background-color: #f6f7f9;
+    -cor-enviada: #1d4ed8;
+    -cor-recebida: #047857;
+    -cor-erro: #b91c1c;
+}
+
+.barra-topo {
+    -fx-background-color: #ffffff;
+    -fx-border-color: transparent transparent #d5d9e0 transparent;
+    -fx-padding: 10 12 10 12;
+    -fx-spacing: 8;
+    -fx-alignment: center-left;
+}
+
+.titulo-secao {
+    -fx-font-weight: bold;
+    -fx-font-size: 14px;
+}
+
+.subtitulo {
+    -fx-text-fill: #555b66;
+    -fx-font-size: 12px;
+}
+
+.contador {
+    -fx-text-fill: #6b7280;
+    -fx-font-size: 12px;
+}
+
+.cartao {
+    -fx-background-color: #ffffff;
+    -fx-background-radius: 6;
+    -fx-border-color: #d5d9e0;
+    -fx-border-radius: 6;
+    -fx-padding: 12;
+    -fx-spacing: 8;
+}
+
+.indicador {
+    -fx-font-weight: bold;
+    -fx-padding: 3 10 3 10;
+    -fx-background-radius: 10;
+    -fx-background-color: #e5e7eb;
+    -fx-text-fill: #374151;
+}
+
+.indicador.ativo {
+    -fx-background-color: #d1fae5;
+    -fx-text-fill: #065f46;
+}
+
+.indicador.alerta {
+    -fx-background-color: #fef3c7;
+    -fx-text-fill: #92400e;
+}
+
+.metrica {
+    -fx-font-size: 22px;
+    -fx-font-weight: bold;
+}
+
+.metrica-rotulo {
+    -fx-text-fill: #6b7280;
+    -fx-font-size: 11px;
+}
+
+/* Area dos JSONs */
+.painel-json {
+    -fx-background-color: #ffffff;
+    -fx-border-color: #d5d9e0;
+    -fx-border-radius: 6;
+    -fx-background-radius: 6;
+}
+
+.lista-json {
+    -fx-font-family: "Monospaced";
+    -fx-font-size: 12px;
+}
+
+.lista-json .list-cell {
+    -fx-padding: 3 6 3 6;
+}
+
+.lista-json .list-cell.json-enviada {
+    -fx-text-fill: -cor-enviada;
+}
+
+.lista-json .list-cell.json-recebida {
+    -fx-text-fill: -cor-recebida;
+}
+
+.lista-json .list-cell.json-evento {
+    -fx-text-fill: #6b7280;
+    -fx-font-style: italic;
+}
+
+.lista-json .list-cell:filled:selected {
+    -fx-background-color: #dbeafe;
+}
+
+/* Retorno das operacoes do cliente */
+.retorno {
+    -fx-padding: 6 10 6 10;
+    -fx-background-radius: 4;
+    -fx-wrap-text: true;
+}
+
+.retorno.sucesso {
+    -fx-background-color: #d1fae5;
+    -fx-text-fill: #065f46;
+}
+
+.retorno.erro {
+    -fx-background-color: #fee2e2;
+    -fx-text-fill: -cor-erro;
+}
+
+.retorno.info {
+    -fx-background-color: #e0e7ff;
+    -fx-text-fill: #3730a3;
+}
+
+.dica {
+    -fx-text-fill: #6b7280;
+    -fx-font-size: 11px;
+}
+
+.valor-lido {
+    -fx-font-family: "Monospaced";
+    -fx-font-weight: bold;
+}
+
+.botao-perigo {
+    -fx-base: #fca5a5;
+}
+
+.botao-principal {
+    -fx-base: #93c5fd;
+    -fx-font-weight: bold;
+}
+
+.table-view .encerrada {
+    -fx-opacity: 0.55;
+}

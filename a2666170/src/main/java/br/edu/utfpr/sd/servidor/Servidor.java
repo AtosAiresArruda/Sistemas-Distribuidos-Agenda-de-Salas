@@ -43,9 +43,14 @@ public class Servidor {
 
     /** Aceita conexoes ate o socket ser fechado, com uma thread por cliente (protocolo 1.1). */
     public static void atender(ServerSocket serverSocket, BancoDados banco) throws IOException {
+        atender(serverSocket, banco, MonitorServidor.NENHUM);
+    }
+
+    /** Igual ao anterior, avisando o monitor sobre cada thread e cada mensagem. */
+    public static void atender(ServerSocket serverSocket, BancoDados banco, MonitorServidor monitor) throws IOException {
         while (!serverSocket.isClosed()) {
             Socket cliente = serverSocket.accept();
-            new TratadorCliente(cliente, banco).start();
+            new TratadorCliente(cliente, banco, monitor).start();
         }
     }
 }
