@@ -52,8 +52,10 @@ a2666170/
 
 ## Requisitos
 
-- **JDK 25** ou superior.
-- **Maven 3.9** ou superior. Se o comando `mvn` não estiver no PATH, dá para usar o Maven que vem com o NetBeans (`/snap/netbeans/current/netbeans/java/maven/bin/mvn`) ou abrir o `pom.xml` no IntelliJ.
+- **JDK 26** (o projeto usa o Temurin 26.0.2).
+- **Maven 3.9** ou superior.
+
+Confira as versões com `java -version` e `mvn -version`. Se a IDE usar outro JDK, aponte o projeto para o JDK 26 nas configurações dela.
 
 Todos os comandos abaixo são executados dentro da pasta `a2666170`:
 
