@@ -3,9 +3,12 @@
 Trabalho da disciplina de Sistemas Distribuídos (UTFPR). Sistema distribuído cliente/servidor de agendamento de salas, com CRUD de usuários e administradores.
 
 ## Stack
-- Linguagem: **Java**.
+- Linguagem: **Java 26.0.2**.
 - Comunicação cliente ↔ servidor: **JSON** sobre TCP, usando Gson (`a2666170/src/libs/gson-2.14.0.jar`).
 - Projeto IntelliJ em `a2666170/` (`a2666170.iml`, fontes em `a2666170/src`).
+- Banco de dados: **SQlite**
+- interface: **Javafx**
+- Sistemas de arquivos: **maven**
 
 ## O que construir
 1. **Cliente**: conecta e faz login em um servidor qualquer. O foco é logar no servidor **de um colega**, mas também deve funcionar com o meu próprio servidor.
@@ -27,7 +30,7 @@ Os arquivos em `a2666170/src/servidor_eco_tcp_json/` são a base para o sistema 
 | Requisitos (documento) | `1hKXp-2MkBlhInwCq8vIMsbpZ92BujFues9ma3d-VwfI` | Requisitos funcionais e não funcionais, e as regras de negócio de cada operação. |
 | IPs das VMs (planilha) | `1u1Oc7BuLEMcmyGXzp8YxMQd79LtMrRjfhIPrL4n6Xqw` | IPs das máquinas virtuais do laboratório. O login nelas exige credenciais do usuário: nunca as digite, peça que o usuário faça o login. |
 
-**Requisito crítico:** as especificações do Drive devem ser seguidas **à risca, em todos os detalhes**: nomes de campos, valores, códigos de resposta e regras de negócio. Os documentos são alterados ao longo do semestre. Antes de implementar ou alterar uma operação, releia o protocolo e os requisitos atualizados, e não presuma formatos.
+**Requisito crítico:** as especificações do Drive devem ser seguidas **à risca, em todos os detalhes**: nomes de campos, valores, códigos de resposta e regras de negócio. Os documentos são alterados ao longo do semestre. **Antes de implementar ou alterar uma operação, releia o protocolo** e os requisitos atualizados, e não presuma formatos.
 
 ## Entrega-Parcial-01
 EP-1 vale 2,0 pontos: 1,0 do cliente e 1,0 do servidor. O escopo é só o **CRUD do usuário comum, com login e logout**. O formato de cada mensagem segue a planilha de protocolo.
@@ -53,3 +56,4 @@ Condições obrigatórias da avaliação:
 ## GitHub
 1. Para tarefas envolvendo git, utilize apenas ações bash. Evite ações via browser.
 2. Sempre que for realizar commit e push, pergunte se estou conectado à rede da UTFPR ou a uma rede home. Na rede UTFPR, realize apenas alterações locais (como `git pull`, `git commit` e outras ações que alteram só o repositório local). Na rede home, realize qualquer alteração.
+
