@@ -2,6 +2,7 @@ package br.edu.utfpr.sd.cliente;
 
 import br.edu.utfpr.sd.comum.ConexaoJson;
 import br.edu.utfpr.sd.comum.Json;
+import br.edu.utfpr.sd.comum.ValidacaoCadastro;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParseException;
@@ -11,6 +12,7 @@ import java.io.InputStreamReader;
 import java.net.Socket;
 import java.net.UnknownHostException;
 import java.nio.charset.StandardCharsets;
+import java.util.Locale;
 
 /**
  * Cliente de console para o CRUD do proprio cadastro (usuario comum).
@@ -88,10 +90,18 @@ public class Cliente {
     }
 
     private void register() throws IOException {
+        // O servidor grava user e email em minusculas (protocolo 2.12)
+        String email = perguntar("Email: ").toLowerCase(Locale.ROOT);
+        String user = perguntar("Usuario: ").toLowerCase(Locale.ROOT);
+        String password = perguntar("Senha: ");
+        if (!dadosValidos(ValidacaoCadastro.email(email), ValidacaoCadastro.user(user), ValidacaoCadastro.password(password))) {
+            return;
+        }
+
         JsonObject req = requisicao("register");
-        req.addProperty("email", perguntar("Email: "));
-        req.addProperty("user", perguntar("Usuario: "));
-        req.addProperty("password", perguntar("Senha: "));
+        req.addProperty("email", email);
+        req.addProperty("user", user);
+        req.addProperty("password", password);
         enviar(req);
     }
 
@@ -125,10 +135,33 @@ public class Cliente {
             return;
         }
         System.out.println("Deixe em branco o que nao quiser alterar. O email nao pode ser alterado.");
+        String user = perguntar("Novo usuario: ").toLowerCase(Locale.ROOT);
+        String password = perguntar("Nova senha: ");
+        // Campo vazio significa "nao alterar", entao so os preenchidos sao conferidos
+        if (!dadosValidos(user.isEmpty() ? null : ValidacaoCadastro.user(user),
+                password.isEmpty() ? null : ValidacaoCadastro.password(password))) {
+            return;
+        }
+
         JsonObject req = requisicaoComToken("update_user");
-        req.addProperty("user", perguntar("Novo usuario: "));
-        req.addProperty("password", perguntar("Nova senha: "));
+        req.addProperty("user", user);
+        req.addProperty("password", password);
         enviar(req);
+    }
+
+    /** Mostra os problemas encontrados (null = campo valido) e diz se a requisicao pode ser enviada. */
+    private boolean dadosValidos(String... problemas) {
+        boolean valido = true;
+        for (String problema : problemas) {
+            if (problema != null) {
+                System.out.println("!! " + problema);
+                valido = false;
+            }
+        }
+        if (!valido) {
+            System.out.println("Requisicao nao enviada. Corrija os dados e tente novamente.");
+        }
+        return valido;
     }
 
     private void deleteUser() throws IOException {
