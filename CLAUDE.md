@@ -4,7 +4,7 @@ Trabalho da disciplina de Sistemas Distribuídos (UTFPR). Sistema distribuído c
 
 ## Stack
 - Linguagem: **Java 26.0.2**.
-- Comunicação cliente ↔ servidor: **JSON** sobre TCP, usando Gson (`a2666170/src/libs/gson-2.14.0.jar`).
+- Comunicação cliente ↔ servidor: **JSON** sobre TCP, usando Gson (`a2666170/src/libs/gson-2.14.0.jar`). Os Dados contidos no JSON sempre são STRING
 - Projeto IntelliJ em `a2666170/` (`a2666170.iml`, fontes em `a2666170/src`).
 - Banco de dados: **SQlite**
 - interface: **Javafx**
@@ -21,19 +21,31 @@ Os arquivos em `a2666170/src/servidor_eco_tcp_json/` são a base para o sistema 
 - `EchoServer_TCP_Thread_GSON_Server.java`: servidor TCP com uma thread por cliente, que troca JSON via Gson.
 - `EchoServer_TCP_Thread_GSON_Client.java`: cliente TCP que envia e recebe JSON.
 
-## Especificação (Drive compartilhado SD-BCC)
-Índice em `INDEX.md`. Leia os documentos pelo conector do Google Drive, usando os IDs abaixo.
+## Especificação — fonte principal
+**Fonte principal do protocolo:** https://pedrosalvatori.github.io/protocolo-reserva-salas/
+A página monta a documentação no navegador a partir de `asyncapi.yaml` (AsyncAPI 3.0). Para ler o conteúdo, baixe o arquivo direto: https://pedrosalvatori.github.io/protocolo-reserva-salas/asyncapi.yaml (o HTML da página sozinho não traz as mensagens).
+
+Regras de consulta:
+1. **Sempre consulte esse link primeiro** para qualquer informação do projeto: formato das mensagens, campos, regex, códigos de status, mensagens de erro e regras de negócio.
+2. Se a informação **não estiver** no link, **não presuma**: pergunte ao usuário. Ele pode responder diretamente ou pedir que se consulte o Drive antigo (abaixo).
+3. O Drive **não** é mais consultado por iniciativa própria, só quando o usuário pedir.
+
+**Requisito crítico:** a especificação deve ser seguida **à risca, em todos os detalhes**: nomes de campos, valores, códigos de resposta e regras de negócio. O protocolo é alterado ao longo do semestre. **Antes de implementar ou alterar uma operação, releia o protocolo atualizado** e não presuma formatos.
+
+### Decisões do usuário que divergem do protocolo
+- **Queda de conexão = logout.** Qualquer encerramento da conexão (cliente fecha o app, processo morto, erro de I/O, timeout de inatividade de 300 s ou servidor fechando a conexão) invalida o token da sessão daquela conexão (remove da whitelist). Isso substitui a regra 1.9, que mantinha o token válido após o timeout.
+
+### Drive antigo (SD-BCC) — só quando o usuário pedir
+Índice em `INDEX.md`. Leia pelo conector do Google Drive, usando os IDs abaixo.
 
 | Arquivo | ID | Conteúdo |
 |---|---|---|
-| Protocolo de troca de Mensagens (planilha) | `1CK27K-MR88xDL7VikYjhQYnJoeDnppd9rFUuso_ZXwg` | Formato de **todas** as mensagens JSON. Cliente e servidor devem implementar todas. |
+| Protocolo de troca de Mensagens (planilha, antiga) | `1CK27K-MR88xDL7VikYjhQYnJoeDnppd9rFUuso_ZXwg` | Versão antiga do protocolo. |
 | Requisitos (documento) | `1hKXp-2MkBlhInwCq8vIMsbpZ92BujFues9ma3d-VwfI` | Requisitos funcionais e não funcionais, e as regras de negócio de cada operação. |
 | IPs das VMs (planilha) | `1u1Oc7BuLEMcmyGXzp8YxMQd79LtMrRjfhIPrL4n6Xqw` | IPs das máquinas virtuais do laboratório. O login nelas exige credenciais do usuário: nunca as digite, peça que o usuário faça o login. |
 
-**Requisito crítico:** as especificações do Drive devem ser seguidas **à risca, em todos os detalhes**: nomes de campos, valores, códigos de resposta e regras de negócio. Os documentos são alterados ao longo do semestre. **Antes de implementar ou alterar uma operação, releia o protocolo** e os requisitos atualizados, e não presuma formatos.
-
 ## Entrega-Parcial-01
-EP-1 vale 2,0 pontos: 1,0 do cliente e 1,0 do servidor. O escopo é só o **CRUD do usuário comum, com login e logout**. O formato de cada mensagem segue a planilha de protocolo.
+EP-1 vale 2,0 pontos: 1,0 do cliente e 1,0 do servidor. O escopo é só o **CRUD do usuário comum, com login e logout**. O formato de cada mensagem segue o protocolo (fonte principal acima).
 
 | Operação | Cliente | Pts | Servidor | Pts |
 |---|---|---|---|---|
@@ -54,6 +66,9 @@ Condições obrigatórias da avaliação:
 - Nenhuma alteração no código é permitida durante a avaliação, nem para corrigir erro crítico. Teste tudo antes.
 
 ## GitHub
-1. Para tarefas envolvendo git, utilize apenas ações bash. Evite ações via browser.
+1. Para tarefas envolvendo git, utilize apenas ações bash. 
 2. Sempre que for realizar commit e push, pergunte se estou conectado à rede da UTFPR ou a uma rede home. Na rede UTFPR, realize apenas alterações locais (como `git pull`, `git commit` e outras ações que alteram só o repositório local). Na rede home, realize qualquer alteração.
 
+## Atualização de Código
+1. Toda e qualquer atualização deve ser explicada.
+2. Quando estiver criando código, quando estiver em dúvida, me pergunte o que fazer.
