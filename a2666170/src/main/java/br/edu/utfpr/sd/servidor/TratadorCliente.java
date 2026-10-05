@@ -9,14 +9,17 @@ import com.google.gson.JsonParseException;
 import java.io.IOException;
 import java.net.Socket;
 import java.net.SocketTimeoutException;
+import java.util.HashSet;
 import java.util.Locale;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Pattern;
 
 /** Thread que atende um cliente: le cada requisicao, processa e envia exatamente uma resposta. */
 public class TratadorCliente extends Thread {
 
-    // Protocolo 1.9: conexao encerrada apos 300 s de inatividade (o token continua valido)
+    // Protocolo 1.9: conexao encerrada apos 300 s de inatividade. Por decisao do projeto,
+    // o token da conexao e invalidado nesse caso tambem (ver encerrarSessao)
     private static final int TIMEOUT_INATIVIDADE_MS = 300_000;
 
     // Aba "Dicionario" do protocolo
@@ -43,6 +46,9 @@ public class TratadorCliente extends Thread {
     private final BancoDados banco;
     private final MonitorServidor monitor;
     private final String remoto;
+
+    // Tokens validos usados nesta conexao; sao invalidados quando a conexao encerra
+    private final Set<String> tokensDaConexao = new HashSet<>();
 
     public TratadorCliente(Socket socket, BancoDados banco) {
         this(socket, banco, MonitorServidor.NENHUM);
@@ -101,7 +107,25 @@ public class TratadorCliente extends Thread {
             motivo = socket.isClosed() ? "Conexao fechada pelo servidor" : "Erro de I/O: " + e.getMessage();
         }
         System.out.println("Conexao encerrada com cliente: " + remoto);
+        encerrarSessao();
         monitor.conexaoEncerrada(this, motivo);
+    }
+
+    /**
+     * Toda queda de conexao conta como logout: o token usado nesta conexao sai da whitelist.
+     * Cobre fechamento do app sem logout, processo morto, erro de I/O, timeout e fechamento pelo servidor.
+     */
+    private void encerrarSessao() {
+        for (String token : tokensDaConexao) {
+            try {
+                if (banco.invalidarToken(token)) {
+                    System.out.println("Logout forcado do cliente " + remoto + ": token invalidado por queda de conexao.");
+                }
+            } catch (Exception e) {
+                System.err.println("Erro ao invalidar o token do cliente " + remoto + ": " + e.getMessage());
+            }
+        }
+        tokensDaConexao.clear();
     }
 
     /** Processa uma requisicao e devolve a resposta; nunca lanca excecao (protocolo 4.5). */
@@ -171,6 +195,7 @@ public class TratadorCliente extends Thread {
             throw new Falha("409", "Usuario ja possui sessao ativa");
         }
 
+        tokensDaConexao.add(token);
         JsonObject resposta = Json.resposta("login_response", "200", "Login realizado com sucesso");
         resposta.addProperty("token", token);
         resposta.addProperty("role", usuario.role());
@@ -182,6 +207,7 @@ public class TratadorCliente extends Thread {
         if (!banco.invalidarToken(token)) {
             throw new Falha("401", TOKEN_INVALIDO);
         }
+        esquecerToken(token);
         return Json.resposta("logout_response", "200", "Logout realizado com sucesso");
     }
 
@@ -233,6 +259,7 @@ public class TratadorCliente extends Thread {
         if (!banco.removerUsuario(usuario.id())) {
             throw new Falha("403", "Nao e possivel remover o ultimo administrador");
         }
+        esquecerToken(token);
         return Json.resposta("delete_user_response", "200", "Usuario removido com sucesso");
     }
 
@@ -257,7 +284,14 @@ public class TratadorCliente extends Thread {
         if (usuario == null) {
             throw new Falha("401", TOKEN_INVALIDO);
         }
+        // Um token valido pode chegar por uma conexao nova (ex.: cliente reconectou); passa a ser desta
+        tokensDaConexao.add(token);
         return usuario;
+    }
+
+    /** O token ja foi invalidado pela propria operacao; nada a fazer quando a conexao cair. */
+    private void esquecerToken(String token) {
+        tokensDaConexao.remove(token);
     }
 
     /** Campo obrigatorio do tipo string; ausente, nulo ou de outro tipo responde 400 (protocolo 2.10). */

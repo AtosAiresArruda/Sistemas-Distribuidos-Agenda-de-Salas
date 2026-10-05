@@ -2,7 +2,7 @@
 
 Essa aplicação foi desenvolvida em conjunto da matéria Sistemas Distribuídos. O objetivo dessa matéria é que diferentes alunos construam um software que se comunique plenamente por toda a sala. Esse repositório é o meu software.
 
-O sistema é um agendamento de salas cliente/servidor. Cliente e servidor trocam mensagens **JSON sobre TCP**, seguindo o protocolo definido pela turma no Drive compartilhado SD-BCC (índice em [INDEX.md](INDEX.md)). Como todos seguem o mesmo protocolo, o meu cliente conversa com o servidor de qualquer colega, e o meu servidor atende o cliente de qualquer colega.
+O sistema é um agendamento de salas cliente/servidor. Cliente e servidor trocam mensagens **JSON sobre TCP**, seguindo o protocolo definido pela turma ([pedrosalvatori.github.io/protocolo-reserva-salas](https://pedrosalvatori.github.io/protocolo-reserva-salas/)). Como todos seguem o mesmo protocolo, o meu cliente conversa com o servidor de qualquer colega, e o meu servidor atende o cliente de qualquer colega.
 
 ## Funcionamento
 
@@ -10,8 +10,9 @@ O sistema é um agendamento de salas cliente/servidor. Cliente e servidor trocam
 - Pede a porta ao iniciar e cria uma thread para cada cliente que se conecta.
 - Guarda usuários e sessões em SQLite, no arquivo `agenda.db` da pasta de onde foi iniciado. As senhas ficam em hash.
 - Gera um token de 64 caracteres hexadecimais no login. Cada usuário tem uma única sessão ativa, e o token expira após 30 minutos sem uso.
-- Fecha conexões inativas por 300 segundos. O token continua válido, e o cliente pode reconectar.
-- Responde a toda requisição com `op`, `status` e `message`, usando exatamente os textos da planilha de protocolo.
+- Fecha conexões inativas por 300 segundos.
+- Trata qualquer queda de conexão como logout: se o cliente fechar o app sem logout, o processo morrer, a rede cair ou a conexão expirar por inatividade, o token daquela conexão é invalidado e um novo login funciona na hora.
+- Responde a toda requisição com `op`, `status` e `message`, usando exatamente os textos do protocolo.
 
 **Cliente** ([Cliente.java](a2666170/src/main/java/br/edu/utfpr/sd/cliente/Cliente.java))
 - Pede o IP e a porta do servidor e mostra um menu com as operações.
@@ -144,7 +145,7 @@ Para começar com o banco vazio, pare o servidor e apague o `agenda.db`.
    ```
 
 3. Informe o IP e a porta do colega e execute o roteiro da seção anterior.
-4. Confira no console cada mensagem enviada e recebida. Se a resposta do servidor dele tiver um `status` ou `message` diferente da planilha de protocolo, anote e combine a correção com o colega.
+4. Confira no console cada mensagem enviada e recebida. Se a resposta do servidor dele tiver um `status` ou `message` diferente do protocolo, anote e combine a correção com o colega.
 
 Se o cliente mostrar `Erro de comunicacao` ao conectar, verifique se o IP e a porta estão certos, se o servidor do colega está rodando e se o firewall dele libera a porta.
 

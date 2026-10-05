@@ -151,6 +151,24 @@ class ServidorTest {
         assertResposta(enviar("{\"op\":\"login\""), "error", "400", "Requisicao invalida");
         assertResposta(enviar("{\"email\":\"a@b.com\"}"), "error", "400", "Requisicao invalida");
         assertResposta(enviar("{\"op\":\"voar\"}"), "error", "400", "Operacao desconhecida");
+
+        // Outras linhas fora do formato: vazia, nao-objeto, 'op' que nao e string, lixo apos o JSON
+        String invalida = "Requisicao invalida";
+        assertResposta(enviar(""), "error", "400", invalida);
+        assertResposta(enviar("[]"), "error", "400", invalida);
+        assertResposta(enviar("[{\"op\":\"login\"}]"), "error", "400", invalida);
+        assertResposta(enviar("123"), "error", "400", invalida);
+        assertResposta(enviar("\"login\""), "error", "400", invalida);
+        assertResposta(enviar("null"), "error", "400", invalida);
+        assertResposta(enviar("{}"), "error", "400", invalida);
+        assertResposta(enviar("{\"op\":null}"), "error", "400", invalida);
+        assertResposta(enviar("{\"op\":1}"), "error", "400", invalida);
+        assertResposta(enviar("{\"op\":{\"x\":\"y\"}}"), "error", "400", invalida);
+        assertResposta(enviar("{'op':'login'}"), "error", "400", invalida);
+        assertResposta(enviar("{\"op\":\"login\"} lixo"), "error", "400", invalida);
+        assertResposta(enviar("{\"op\":\"login\"}{\"op\":\"login\"}"), "error", "400", invalida);
+        // 'op' e case-sensitive (protocolo 2.2)
+        assertResposta(enviar("{\"op\":\"LOGIN\"}"), "error", "400", "Operacao desconhecida");
         assertResposta(enviar("{\"op\":\"x\",\"lixo\":\"" + "a".repeat(9000) + "\"}"),
                 "error", "400", "Mensagem excede o tamanho maximo");
 
@@ -165,9 +183,68 @@ class ServidorTest {
         try (ConexaoJson outro = novaConexao()) {
             outro.enviarTexto("{\"op\":\"login\",\"email\":\"" + EMAIL + "\",\"password\":\"senha123\"}");
             assertResposta(Json.parseObjeto(outro.receber()), "login_response", "200", "Login realizado com sucesso");
+            // Enquanto a outra conexao esta aberta, a sessao dela continua ativa
+            assertResposta(logar(EMAIL, "senha123"), "login_response", "409", "Usuario ja possui sessao ativa");
         }
-        // A sessao aberta pelo outro cliente continua ativa
-        assertResposta(logar(EMAIL, "senha123"), "login_response", "409", "Usuario ja possui sessao ativa");
+    }
+
+    @Test
+    void quedaDaConexaoFazLogout() throws Exception {
+        registrar("joao", EMAIL, "senha123");
+        ConexaoJson outro = novaConexao();
+        String token = loginEm(outro);
+        // Cliente fecha o app sem enviar logout (FIN)
+        outro.close();
+        assertSessaoEncerrada(token);
+    }
+
+    @Test
+    void processoMortoFazLogout() throws Exception {
+        registrar("joao", EMAIL, "senha123");
+        Socket socket = new Socket("127.0.0.1", serverSocket.getLocalPort());
+        ConexaoJson outro = new ConexaoJson(socket, "Teste");
+        String token = loginEm(outro);
+        // Encerramento brusco (RST), como num processo morto ou cabo desconectado
+        socket.setSoLinger(true, 0);
+        socket.close();
+        assertSessaoEncerrada(token);
+    }
+
+    @Test
+    void logoutNormalNaoAfetaOutraSessao() throws Exception {
+        registrar("joao", EMAIL, "senha123");
+        registrar("maria", "maria@email.com", "senha123");
+        ConexaoJson outro = novaConexao();
+        loginEm(outro);
+        String tokenMaria = logar("maria@email.com", "senha123").get("token").getAsString();
+        outro.close();
+        // A queda da outra conexao so derruba o token dela
+        Thread.sleep(300);
+        assertResposta(comToken("read_user", tokenMaria), "read_user_response", "200", "Consulta realizada com sucesso");
+    }
+
+    /** Faz login de joao na conexao dada e devolve o token. */
+    private static String loginEm(ConexaoJson c) throws IOException {
+        c.enviarTexto("{\"op\":\"login\",\"email\":\"" + EMAIL + "\",\"password\":\"senha123\"}");
+        JsonObject resposta = Json.parseObjeto(c.receber());
+        assertResposta(resposta, "login_response", "200", "Login realizado com sucesso");
+        return resposta.get("token").getAsString();
+    }
+
+    /** O servidor percebe a queda em outra thread; espera ate 3 s pelo logout forcado. */
+    private void assertSessaoEncerrada(String token) throws Exception {
+        JsonObject resposta = null;
+        for (int i = 0; i < 30; i++) {
+            resposta = comToken("read_user", token);
+            if ("401".equals(resposta.get("status").getAsString())) {
+                break;
+            }
+            Thread.sleep(100);
+        }
+        assertResposta(resposta, "read_user_response", "401", "Token invalido ou expirado");
+        assertResposta(comToken("logout", token), "logout_response", "401", "Token invalido ou expirado");
+        // Sem sessao presa: um novo login funciona na hora
+        assertResposta(logar(EMAIL, "senha123"), "login_response", "200", "Login realizado com sucesso");
     }
 
     private String cadastrarELogar() throws IOException {
