@@ -8,6 +8,7 @@ import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
+import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.time.LocalDateTime;
@@ -32,6 +33,10 @@ public class BancoDados {
     private final Connection conexao;
 
     public record Usuario(long id, String user, String email, String role, String createdAt) {
+    }
+
+    /** Conteudo bruto de uma tabela: nomes das colunas e valores de cada linha (null = NULL no banco). */
+    public record Tabela(List<String> colunas, List<List<String>> linhas) {
     }
 
     public BancoDados(String arquivo) throws SQLException {
@@ -210,6 +215,27 @@ public class BancoDados {
             ps.executeUpdate();
         }
         return true;
+    }
+
+    /** Le a tabela usuarios inteira, com todas as colunas, exatamente como esta gravada (usada pela interface). */
+    public synchronized Tabela lerTabelaUsuarios() throws SQLException {
+        try (Statement st = conexao.createStatement()) {
+            ResultSet rs = st.executeQuery("SELECT * FROM usuarios ORDER BY id");
+            ResultSetMetaData meta = rs.getMetaData();
+            List<String> colunas = new ArrayList<>();
+            for (int i = 1; i <= meta.getColumnCount(); i++) {
+                colunas.add(meta.getColumnName(i));
+            }
+            List<List<String>> linhas = new ArrayList<>();
+            while (rs.next()) {
+                List<String> linha = new ArrayList<>();
+                for (int i = 1; i <= colunas.size(); i++) {
+                    linha.add(rs.getString(i));
+                }
+                linhas.add(linha);
+            }
+            return new Tabela(colunas, linhas);
+        }
     }
 
     private Usuario buscarUsuario(long id) throws SQLException {

@@ -9,10 +9,15 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParseException;
 import java.io.IOException;
 import java.net.BindException;
+import java.net.Inet4Address;
+import java.net.NetworkInterface;
+import java.net.SocketException;
 import java.net.ServerSocket;
 import java.sql.SQLException;
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.function.Function;
 import javafx.application.Application;
 import javafx.application.Platform;
@@ -30,12 +35,17 @@ import javafx.geometry.Pos;
 import javafx.scene.Scene;
 import javafx.scene.control.Alert;
 import javafx.scene.control.Button;
+import javafx.scene.control.ButtonBar;
+import javafx.scene.control.ButtonType;
 import javafx.scene.control.Label;
 import javafx.scene.control.SplitPane;
+import javafx.scene.control.Tab;
+import javafx.scene.control.TabPane;
 import javafx.scene.control.TableColumn;
 import javafx.scene.control.TableRow;
 import javafx.scene.control.TableView;
 import javafx.scene.control.TextField;
+import javafx.scene.control.Tooltip;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
@@ -45,7 +55,8 @@ import javafx.stage.Stage;
 
 /**
  * Interface grafica do servidor: pede a porta, inicia o servidor e monitora as threads.
- * A aba principal mostra as threads ativas, a conversa de cada uma e a comunicacao de todas.
+ * A aba principal mostra as threads ativas, a conversa de cada uma e a comunicacao de todas;
+ * a aba "Banco de dados" mostra a tabela de usuarios do SQLite.
  */
 public class ServidorApp extends Application {
 
@@ -89,14 +100,31 @@ public class ServidorApp extends Application {
     private final Button botaoParar = new Button("Parar");
     private final Label indicador = new Label("Parado");
 
+    private final TableView<List<String>> tabelaUsuarios = new TableView<>();
+    private final Label resumoBanco = new Label("Ainda nao lido.");
+    // Colunas da ultima leitura, para achar o "id" da linha selecionada
+    private List<String> colunasBanco = List.of();
+    private boolean bancoLido;
+
     private BancoDados banco;
     private ServerSocket serverSocket;
 
     @Override
     public void start(Stage palco) {
-        BorderPane raiz = new BorderPane();
-        raiz.setTop(barraTopo());
-        raiz.setCenter(areaMonitor());
+        BorderPane abaServidor = new BorderPane();
+        abaServidor.setTop(barraTopo());
+        abaServidor.setCenter(areaMonitor());
+
+        Tab servidor = new Tab("Servidor", abaServidor);
+        Tab bancoDados = new Tab("Banco de dados", abaBanco());
+        // Primeira leitura do banco quando a aba e aberta pela primeira vez; depois, so pelo botao
+        bancoDados.setOnSelectionChanged(e -> {
+            if (bancoDados.isSelected() && !bancoLido) {
+                atualizarBanco();
+            }
+        });
+        TabPane raiz = new TabPane(servidor, bancoDados);
+        raiz.setTabClosingPolicy(TabPane.TabClosingPolicy.UNAVAILABLE);
 
         Scene cena = new Scene(raiz, 1200, 780);
         cena.getStylesheets().add(PainelJson.class.getResource("estilo.css").toExternalForm());
@@ -116,6 +144,15 @@ public class ServidorApp extends Application {
     // ------------------------------------------------------------------ layout
 
     private HBox barraTopo() {
+        // IP desta maquina, para informar aos colegas que vao conectar
+        List<String[]> ips = meusIps();
+        Label ip = new Label("IP: " + (ips.isEmpty() ? "sem rede"
+                : String.join("  |  ", ips.stream().map(i -> i[0]).toList())));
+        ip.getStyleClass().add("indicador");
+        if (!ips.isEmpty()) {
+            ip.setTooltip(new Tooltip(String.join("\n", ips.stream().map(i -> i[0] + " (" + i[1] + ")").toList())));
+        }
+
         Label rotulo = new Label("Porta:");
         campoPorta.setPromptText("ex.: 23456");
         campoPorta.setPrefColumnCount(7);
@@ -130,13 +167,31 @@ public class ServidorApp extends Application {
         Region espaco = new Region();
         HBox.setHgrow(espaco, Priority.ALWAYS);
 
-        HBox barra = new HBox(rotulo, campoPorta, botaoIniciar, botaoParar, indicador, espaco,
+        HBox barra = new HBox(ip, rotulo, campoPorta, botaoIniciar, botaoParar, indicador, espaco,
                 metrica(threadsAtivas, "threads ativas"),
                 metrica(totalConexoes, "conexoes desde o inicio"),
                 metrica(totalMensagens, "mensagens JSON"));
         barra.getStyleClass().add("barra-topo");
         barra.setSpacing(10);
         return barra;
+    }
+
+    /** IPv4 das interfaces de rede ativas (sem a loopback), como {ip, nome da interface}. */
+    private static List<String[]> meusIps() {
+        List<String[]> ips = new ArrayList<>();
+        try {
+            for (NetworkInterface rede : NetworkInterface.networkInterfaces().toList()) {
+                if (!rede.isUp() || rede.isLoopback() || rede.isVirtual()) {
+                    continue;
+                }
+                rede.inetAddresses()
+                        .filter(Inet4Address.class::isInstance)
+                        .forEach(endereco -> ips.add(new String[] {endereco.getHostAddress(), rede.getDisplayName()}));
+            }
+        } catch (SocketException e) {
+            System.err.println("Nao foi possivel ler o IP da maquina: " + e.getMessage());
+        }
+        return ips;
     }
 
     private VBox metrica(IntegerProperty valor, String rotulo) {
@@ -234,7 +289,128 @@ public class ServidorApp extends Application {
         }
     }
 
+    /** Aba que mostra a tabela usuarios do SQLite como ela esta gravada, relida pelo botao Atualizar. */
+    private VBox abaBanco() {
+        Label titulo = new Label("Tabela usuarios (" + ARQUIVO_BANCO + ")");
+        titulo.getStyleClass().add("titulo-secao");
+        resumoBanco.getStyleClass().add("contador");
+        Button atualizar = new Button("Atualizar");
+        atualizar.getStyleClass().add("botao-principal");
+        atualizar.setOnAction(e -> atualizarBanco());
+        Button deletar = new Button("Deletar");
+        deletar.getStyleClass().add("botao-perigo");
+        deletar.disableProperty().bind(tabelaUsuarios.getSelectionModel().selectedItemProperty().isNull());
+        deletar.setOnAction(e -> deletarUsuario());
+
+        Region espaco = new Region();
+        HBox.setHgrow(espaco, Priority.ALWAYS);
+        HBox cabecalho = new HBox(8, titulo, espaco, resumoBanco, deletar, atualizar);
+        cabecalho.setAlignment(Pos.CENTER_LEFT);
+
+        tabelaUsuarios.setPlaceholder(new Label("Nenhum usuario cadastrado."));
+        // Sem ajuste automatico: cada coluna tem a largura do seu conteudo e a tabela rola na horizontal
+        tabelaUsuarios.setColumnResizePolicy(TableView.UNCONSTRAINED_RESIZE_POLICY);
+        VBox.setVgrow(tabelaUsuarios, Priority.ALWAYS);
+
+        VBox painel = new VBox(6, cabecalho, tabelaUsuarios);
+        painel.getStyleClass().add("painel-json");
+        painel.setPadding(new Insets(8));
+        VBox aba = new VBox(painel);
+        VBox.setVgrow(painel, Priority.ALWAYS);
+        aba.setPadding(new Insets(8));
+        return aba;
+    }
+
+    /** Le a tabela usuarios no banco e substitui as colunas e linhas exibidas pelo resultado da leitura. */
+    private void atualizarBanco() {
+        if (!abrirBanco()) {
+            return;
+        }
+        BancoDados.Tabela tabela;
+        try {
+            tabela = banco.lerTabelaUsuarios();
+        } catch (SQLException e) {
+            erro("Banco de dados", "Nao foi possivel ler a tabela usuarios: " + e.getMessage());
+            return;
+        }
+        bancoLido = true;
+        colunasBanco = tabela.colunas();
+
+        tabelaUsuarios.getColumns().clear();
+        for (int i = 0; i < tabela.colunas().size(); i++) {
+            int indice = i;
+            TableColumn<List<String>, String> coluna = new TableColumn<>(tabela.colunas().get(i));
+            coluna.setCellValueFactory(c -> new SimpleStringProperty(exibir(c.getValue().get(indice))));
+            int caracteres = coluna.getText().length();
+            for (List<String> linha : tabela.linhas()) {
+                caracteres = Math.max(caracteres, exibir(linha.get(indice)).length());
+            }
+            coluna.setPrefWidth(caracteres * 8 + 24);
+            tabelaUsuarios.getColumns().add(coluna);
+        }
+        tabelaUsuarios.setItems(FXCollections.observableArrayList(tabela.linhas()));
+        resumoBanco.setText(tabela.linhas().size() + " registro(s) - lido as " + LocalTime.now().format(HORA));
+    }
+
+    /** Pede confirmacao e apaga o usuario selecionado; depois rele o banco para a tabela refletir o resultado. */
+    private void deletarUsuario() {
+        List<String> linha = tabelaUsuarios.getSelectionModel().getSelectedItem();
+        if (linha == null) {
+            return;
+        }
+        long id = Long.parseLong(linha.get(colunasBanco.indexOf("id")));
+        String descricao = "id " + id + " - " + linha.get(colunasBanco.indexOf("user"))
+                + " (" + linha.get(colunasBanco.indexOf("email")) + ")";
+
+        ButtonType confirmar = new ButtonType("Deletar", ButtonBar.ButtonData.OK_DONE);
+        ButtonType cancelar = new ButtonType("Cancelar", ButtonBar.ButtonData.CANCEL_CLOSE);
+        Alert alerta = new Alert(Alert.AlertType.WARNING,
+                "Esta e uma operacao destrutiva: o usuario sera apagado do banco de dados e sua sessao, "
+                        + "se houver, sera invalidada. Nao e possivel desfazer.\n\nTem certeza que deseja deletar\n"
+                        + descricao + "?",
+                confirmar, cancelar);
+        alerta.setTitle("Confirmar exclusao");
+        alerta.setHeaderText("Deletar usuario?");
+        // Enter cancela: a exclusao so acontece clicando em Deletar
+        ((Button) alerta.getDialogPane().lookupButton(confirmar)).setDefaultButton(false);
+        ((Button) alerta.getDialogPane().lookupButton(cancelar)).setDefaultButton(true);
+        if (alerta.showAndWait().orElse(cancelar) != confirmar) {
+            return;
+        }
+
+        try {
+            if (!banco.removerUsuario(id)) {
+                erro("Exclusao recusada", "Nao e possivel deletar o ultimo administrador do sistema.");
+                return;
+            }
+        } catch (SQLException e) {
+            erro("Banco de dados", "Nao foi possivel deletar o usuario: " + e.getMessage());
+            return;
+        }
+        System.out.println("Usuario " + descricao + " deletado pela interface do servidor.");
+        painelGeral.evento("Servidor", "Usuario " + descricao + " deletado pela interface do servidor.");
+        atualizarBanco();
+    }
+
+    private static String exibir(String valor) {
+        return valor == null ? "NULL" : valor;
+    }
+
     // ------------------------------------------------------------------ servidor
+
+    /** Abre o banco se ainda nao estiver aberto. Retorna false (ja avisando o usuario) se falhar. */
+    private boolean abrirBanco() {
+        if (banco != null) {
+            return true;
+        }
+        try {
+            banco = new BancoDados(ARQUIVO_BANCO);
+            return true;
+        } catch (SQLException e) {
+            erro("Banco de dados", "Nao foi possivel abrir o banco " + ARQUIVO_BANCO + ": " + e.getMessage());
+            return false;
+        }
+    }
 
     private void iniciarServidor() {
         int porta;
@@ -248,14 +424,11 @@ public class ServidorApp extends Application {
             return;
         }
 
-        try {
-            if (banco == null) {
-                banco = new BancoDados(ARQUIVO_BANCO);
-            }
-            serverSocket = new ServerSocket(porta);
-        } catch (SQLException e) {
-            erro("Banco de dados", "Nao foi possivel abrir o banco " + ARQUIVO_BANCO + ": " + e.getMessage());
+        if (!abrirBanco()) {
             return;
+        }
+        try {
+            serverSocket = new ServerSocket(porta);
         } catch (BindException e) {
             erro("Porta ocupada", "A porta " + porta + " esta ocupada. Escolha outra porta.");
             return;
