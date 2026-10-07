@@ -58,11 +58,20 @@ class ServidorTest {
         String invalido = "Dados de cadastro em formato invalido";
         assertResposta(registrar("joao1", "a@b.com", "senha123"), "register_response", "400", invalido);
         assertResposta(registrar("ana", "sem-arroba", "senha123"), "register_response", "400", invalido);
+        // Email com letra maiuscula nao casa com a regex do protocolo: 400, sem converter
+        assertResposta(registrar("ana", "Ana@email.com", "senha123"), "register_response", "400", invalido);
+        assertResposta(registrar("ana", "ana@EMAIL.com", "senha123"), "register_response", "400", invalido);
+        assertResposta(registrar("ana", "ana@email.COM", "senha123"), "register_response", "400", invalido);
         assertResposta(registrar("ana", "ana@email.com", "senha 123"), "register_response", "400", invalido);
         assertResposta(registrar("ana", "ana@email.com", ""), "register_response", "400", invalido);
         assertResposta(enviar("{\"op\":\"register\",\"email\":\"ana@email.com\",\"user\":\"ana\"}"), "register_response", "400", invalido);
         assertResposta(enviar("{\"op\":\"register\",\"email\":\"ana@email.com\",\"user\":null,\"password\":\"a1\"}"), "register_response", "400", invalido);
         assertResposta(enviar("{\"op\":\"register\",\"email\":\"ana@email.com\",\"user\":\"ana\",\"password\":123}"), "register_response", "400", invalido);
+
+        // Regex v2.1: dominio com varios niveis e hifen, '_' e '-' antes do @
+        assertResposta(registrar("maria", "maria.souza@alunos.utfpr.edu.br", "senha123"), "register_response", "201", "Usuario cadastrado com sucesso");
+        assertResposta(registrar("ana", "ana_b-c@meu-provedor.com.br", "senha123"), "register_response", "201", "Usuario cadastrado com sucesso");
+        assertResposta(registrar("bia", "bia@email.c", "senha123"), "register_response", "400", invalido);
     }
 
     @Test
@@ -136,8 +145,11 @@ class ServidorTest {
     void deleteUser() throws IOException {
         String token = cadastrarELogar();
 
-        assertResposta(apagar(token, "errada1"), "delete_user_response", "401", "Token invalido ou expirado");
+        assertResposta(apagar(token, "errada1"), "delete_user_response", "403", "Senha incorreta");
+        // A senha errada nao derruba a sessao: o token continua valido
+        assertResposta(comToken("read_user", token), "read_user_response", "200", "Consulta realizada com sucesso");
         assertResposta(apagar(token, "sen ha"), "delete_user_response", "400", "Senha em formato invalido");
+        assertResposta(apagar("a".repeat(64), "senha123"), "delete_user_response", "401", "Token invalido ou expirado");
         assertResposta(apagar(token, "senha123"), "delete_user_response", "200", "Usuario removido com sucesso");
 
         // O token e invalidado junto e o cadastro deixa de existir

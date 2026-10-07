@@ -25,7 +25,7 @@ public class TratadorCliente extends Thread {
     // Aba "Dicionario" do protocolo
     private static final Pattern USER = Pattern.compile("^[a-z]{1,30}$");
     private static final Pattern PASSWORD = Pattern.compile("^[A-Za-z0-9]{1,20}$");
-    private static final Pattern EMAIL = Pattern.compile("^[a-z0-9.]+@[a-z0-9]+(\\.[a-z]+){1,2}$");
+    private static final Pattern EMAIL = Pattern.compile("^[a-z0-9._-]+@[a-z0-9-]+(\\.[a-z0-9-]+)*\\.[a-z]{2,}$");
     private static final Pattern TOKEN = Pattern.compile("^[a-f0-9]{64}$");
 
     private static final String TOKEN_INVALIDO = "Token invalido ou expirado";
@@ -164,7 +164,8 @@ public class TratadorCliente extends Thread {
 
     private JsonObject register(JsonObject req) throws Exception {
         String formatoInvalido = "Dados de cadastro em formato invalido";
-        String email = minusculas(texto(req, "email", formatoInvalido));
+        // O email e validado como chegou: letra maiuscula nao casa com a regex e responde 400
+        String email = texto(req, "email", formatoInvalido);
         String user = minusculas(texto(req, "user", formatoInvalido));
         String password = texto(req, "password", formatoInvalido);
         if (!confere(EMAIL, email) || !confere(USER, user) || !confere(PASSWORD, password)) {
@@ -252,9 +253,9 @@ public class TratadorCliente extends Thread {
         }
 
         Usuario usuario = sessao(token);
-        // Senha incorreta tambem responde 401; o protocolo so define esta mensagem para o 401
+        // Senha incorreta com token valido responde 403 e a sessao continua (protocolo 3.9)
         if (!banco.senhaConfere(usuario.id(), password)) {
-            throw new Falha("401", TOKEN_INVALIDO);
+            throw new Falha("403", "Senha incorreta");
         }
         if (!banco.removerUsuario(usuario.id())) {
             throw new Falha("403", "Nao e possivel remover o ultimo administrador");

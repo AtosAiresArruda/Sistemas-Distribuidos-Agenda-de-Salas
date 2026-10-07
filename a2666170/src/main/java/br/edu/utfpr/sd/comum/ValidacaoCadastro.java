@@ -1,5 +1,7 @@
 package br.edu.utfpr.sd.comum;
 
+import java.util.Arrays;
+import java.util.Locale;
 import java.util.regex.Pattern;
 
 /**
@@ -12,11 +14,11 @@ public final class ValidacaoCadastro {
 
     public static final Pattern USER = Pattern.compile("^[a-z]{1,30}$");
     public static final Pattern PASSWORD = Pattern.compile("^[A-Za-z0-9]{1,20}$");
-    public static final Pattern EMAIL = Pattern.compile("^[a-z0-9.]+@[a-z0-9]+(\\.[a-z]+){1,2}$");
+    public static final Pattern EMAIL = Pattern.compile("^[a-z0-9._-]+@[a-z0-9-]+(\\.[a-z0-9-]+)*\\.[a-z]{2,}$");
 
     private static final String FORMATO_EMAIL =
-            "Formato esperado: letras minusculas, numeros e ponto antes do @; depois do @, um dominio "
-                    + "com 1 ou 2 sufixos (ex.: joao.silva@email.com ou joao@utfpr.edu.br).";
+            "Formato esperado: letras minusculas, numeros, ponto, '_' ou '-' antes do @; depois do @, um dominio "
+                    + "terminado em 2 ou mais letras (ex.: joao.silva@email.com ou maria@alunos.utfpr.edu.br).";
     private static final String FORMATO_USER =
             "Formato esperado: de 1 a 30 letras minusculas (a-z), sem numeros, espacos, acentos ou simbolos.";
     private static final String FORMATO_PASSWORD =
@@ -33,24 +35,25 @@ public final class ValidacaoCadastro {
         int arroba = email.indexOf('@');
         if (email.isEmpty()) {
             problema = "o email esta vazio";
+        } else if (!email.equals(email.toLowerCase(Locale.ROOT))) {
+            problema = "o email nao aceita letras maiusculas";
         } else if (arroba < 0 || arroba != email.lastIndexOf('@')) {
             problema = "o email deve ter exatamente um @";
         } else if (arroba == 0) {
             problema = "falta o nome antes do @";
-        } else if (!email.substring(0, arroba).matches("[a-z0-9.]+")) {
-            problema = "antes do @ so sao aceitos letras minusculas, numeros e ponto";
+        } else if (!email.substring(0, arroba).matches("[a-z0-9._-]+")) {
+            problema = "antes do @ so sao aceitos letras minusculas, numeros, ponto, '_' e '-'";
         } else {
             String dominio = email.substring(arroba + 1);
             String[] partes = dominio.split("\\.", -1);
-            int sufixos = partes.length - 1;
-            if (!dominio.matches("[a-z0-9.]+")) {
-                problema = "depois do @ so sao aceitos letras minusculas, numeros e ponto";
-            } else if (sufixos == 0) {
+            if (!dominio.matches("[a-z0-9.-]+")) {
+                problema = "depois do @ so sao aceitos letras minusculas, numeros, ponto e '-'";
+            } else if (partes.length == 1) {
                 problema = "o dominio precisa de pelo menos um sufixo, como .com";
-            } else if (sufixos > 2) {
-                problema = "o dominio '" + dominio + "' tem " + sufixos + " sufixos e o protocolo aceita no maximo 2";
+            } else if (Arrays.stream(partes).anyMatch(String::isEmpty)) {
+                problema = "o dominio '" + dominio + "' tem ponto no inicio, no fim ou repetido";
             } else {
-                problema = "o dominio '" + dominio + "' esta fora do formato (os sufixos devem ter apenas letras)";
+                problema = "a terminacao do dominio '" + dominio + "' deve ter 2 ou mais letras (ex.: .com, .br)";
             }
         }
         return "Email invalido: " + problema + ". " + FORMATO_EMAIL;

@@ -11,16 +11,17 @@ class ValidacaoCadastroTest {
     void aceitaDadosNoFormatoDoProtocolo() {
         assertNull(ValidacaoCadastro.email("joao.silva@email.com"));
         assertNull(ValidacaoCadastro.email("atos@utfpr.edu.br"));
+        assertNull(ValidacaoCadastro.email("maria.souza@alunos.utfpr.edu.br"));
+        assertNull(ValidacaoCadastro.email("at_os-1@meu-provedor.com.br"));
         assertNull(ValidacaoCadastro.user("atos"));
         assertNull(ValidacaoCadastro.password("atos"));
         assertNull(ValidacaoCadastro.password("Senha123"));
     }
 
     @Test
-    void explicaEmailComSufixosDemais() {
-        String problema = ValidacaoCadastro.email("atos@alunos.utfpr.edu.br");
-        assertTrue(problema.contains("tem 3 sufixos"), problema);
-        assertTrue(problema.contains("no maximo 2"), problema);
+    void explicaEmailComMaiusculas() {
+        assertTrue(ValidacaoCadastro.email("Joao.Silva@email.com").contains("letras maiusculas"));
+        assertTrue(ValidacaoCadastro.email("joao@EMAIL.COM").contains("letras maiusculas"));
     }
 
     @Test
@@ -28,9 +29,12 @@ class ValidacaoCadastroTest {
         assertTrue(ValidacaoCadastro.email("").contains("vazio"));
         assertTrue(ValidacaoCadastro.email("atos.email.com").contains("exatamente um @"));
         assertTrue(ValidacaoCadastro.email("@email.com").contains("antes do @"));
-        assertTrue(ValidacaoCadastro.email("at_os@email.com").contains("antes do @"));
+        assertTrue(ValidacaoCadastro.email("at+os@email.com").contains("antes do @"));
+        assertTrue(ValidacaoCadastro.email("atos@em_ail.com").contains("depois do @"));
         assertTrue(ValidacaoCadastro.email("atos@localhost").contains("pelo menos um sufixo"));
-        assertTrue(ValidacaoCadastro.email("atos@email.c0m").contains("apenas letras"));
+        assertTrue(ValidacaoCadastro.email("atos@email..com").contains("repetido"));
+        assertTrue(ValidacaoCadastro.email("atos@email.c").contains("2 ou mais letras"));
+        assertTrue(ValidacaoCadastro.email("atos@email.c0m").contains("2 ou mais letras"));
     }
 
     @Test
