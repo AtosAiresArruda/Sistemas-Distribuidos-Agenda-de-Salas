@@ -45,7 +45,7 @@ Regras de consulta:
 | IPs das VMs (planilha) | `1u1Oc7BuLEMcmyGXzp8YxMQd79LtMrRjfhIPrL4n6Xqw` | IPs das máquinas virtuais do laboratório. O login nelas exige credenciais do usuário: nunca as digite, peça que o usuário faça o login. |
 
 ## Entrega-Parcial-01
-**Status: concluída (registrado em 2026-10-22).** O código entregue está no commit `c55edf0` (`main` e `dev`).
+**Status: concluída (registrado em 2026-10-22).** O código entregue corresponde ao commit `9d06e38`; o zip enviado está em `entrega/a2666170.zip`.
 
 EP-1 vale 2,0 pontos: 1,0 do cliente e 1,0 do servidor. O escopo é só o **CRUD do usuário comum, com login e logout**. O formato de cada mensagem segue o protocolo (fonte principal acima).
 
