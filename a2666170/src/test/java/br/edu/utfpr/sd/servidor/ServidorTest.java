@@ -134,7 +134,8 @@ class ServidorTest {
                 "update_user_response", "400", invalido);
         assertResposta(enviar("{\"op\":\"update_user\",\"token\":\"" + token + "\",\"user\":\"\",\"password\":\"\",\"email\":\"x@y.com\"}"),
                 "update_user_response", "400", invalido);
-        assertResposta(atualizar(TOKEN_FALSO, "pedro", ""), "update_user_response", "401", "Token invalido ou expirado");
+        assertResposta(atualizar(token, "", ""), "update_user_response", "400", "Nenhum dado para atualizar");
+        assertResposta(atualizar(TOKEN_FALSO, "pedro", ""),"update_user_response", "401", "Token invalido ou expirado");
 
         // A nova senha vale no proximo login
         comToken("logout", token);

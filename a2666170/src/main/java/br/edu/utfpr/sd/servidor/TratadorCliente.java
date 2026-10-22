@@ -236,6 +236,10 @@ public class TratadorCliente extends Thread {
         if ((!user.isEmpty() && !confere(USER, user)) || (!password.isEmpty() && !confere(PASSWORD, password))) {
             throw new Falha("400", formatoInvalido);
         }
+        // Regra 2.13 (v2.4): os dois campos vazios nao alteram nada
+        if (user.isEmpty() && password.isEmpty()) {
+            throw new Falha("400", "Nenhum dado para atualizar");
+        }
 
         Usuario usuario = sessao(token);
         if (!banco.atualizar(usuario.id(), user.isEmpty() ? null : user, password.isEmpty() ? null : password)) {
