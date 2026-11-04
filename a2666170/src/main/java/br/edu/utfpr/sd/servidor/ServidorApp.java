@@ -56,7 +56,7 @@ import javafx.stage.Stage;
 /**
  * Interface grafica do servidor: pede a porta, inicia o servidor e monitora as threads.
  * A aba principal mostra as threads ativas, a conversa de cada uma e a comunicacao de todas;
- * a aba "Banco de dados" mostra a tabela de usuarios do SQLite.
+ * a aba "Banco de dados" mostra a tabela de usuarios do SQLite e as duas listas de tokens ativos.
  */
 public class ServidorApp extends Application {
 
@@ -105,6 +105,10 @@ public class ServidorApp extends Application {
     // Colunas da ultima leitura, para achar o "id" da linha selecionada
     private List<String> colunasBanco = List.of();
     private boolean bancoLido;
+    private final TableView<BancoDados.Sessao> tabelaAdmins = new TableView<>();
+    private final TableView<BancoDados.Sessao> tabelaSessoesUsuarios = new TableView<>();
+    private final Label tituloAdmins = new Label("Whitelist de admin - tokens de administradores");
+    private final Label tituloUsuarios = new Label("Tokens de usuarios comuns");
 
     private BancoDados banco;
     private ServerSocket serverSocket;
@@ -315,10 +319,40 @@ public class ServidorApp extends Application {
         VBox painel = new VBox(6, cabecalho, tabelaUsuarios);
         painel.getStyleClass().add("painel-json");
         painel.setPadding(new Insets(8));
-        VBox aba = new VBox(painel);
-        VBox.setVgrow(painel, Priority.ALWAYS);
+
+        // Listas de tokens das sessoes ativas (protocolo 3.14), relidas pelo mesmo botao Atualizar
+        SplitPane listas = new SplitPane(
+                painelSessoes(tituloAdmins, tabelaAdmins, "Nenhum administrador logado."),
+                painelSessoes(tituloUsuarios, tabelaSessoesUsuarios, "Nenhum usuario comum logado."));
+
+        SplitPane area = new SplitPane(painel, listas);
+        area.setOrientation(Orientation.VERTICAL);
+        area.setDividerPositions(0.6);
+        VBox aba = new VBox(area);
+        VBox.setVgrow(area, Priority.ALWAYS);
         aba.setPadding(new Insets(8));
         return aba;
+    }
+
+    private static VBox painelSessoes(Label titulo, TableView<BancoDados.Sessao> tabela, String vazia) {
+        titulo.getStyleClass().add("titulo-secao");
+        tabela.setPlaceholder(new Label(vazia));
+        TableColumn<BancoDados.Sessao, String> user = new TableColumn<>("user");
+        user.setCellValueFactory(c -> new SimpleStringProperty(c.getValue().user()));
+        user.setPrefWidth(110);
+        TableColumn<BancoDados.Sessao, String> email = new TableColumn<>("email");
+        email.setCellValueFactory(c -> new SimpleStringProperty(c.getValue().email()));
+        email.setPrefWidth(180);
+        TableColumn<BancoDados.Sessao, String> token = new TableColumn<>("token");
+        token.setCellValueFactory(c -> new SimpleStringProperty(c.getValue().token()));
+        tabela.getColumns().addAll(List.of(user, email, token));
+        tabela.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_FLEX_LAST_COLUMN);
+        VBox.setVgrow(tabela, Priority.ALWAYS);
+
+        VBox painel = new VBox(6, titulo, tabela);
+        painel.getStyleClass().add("painel-json");
+        painel.setPadding(new Insets(8));
+        return painel;
     }
 
     /** Le a tabela usuarios no banco e substitui as colunas e linhas exibidas pelo resultado da leitura. */
@@ -327,12 +361,20 @@ public class ServidorApp extends Application {
             return;
         }
         BancoDados.Tabela tabela;
+        List<BancoDados.Sessao> admins;
+        List<BancoDados.Sessao> usuarios;
         try {
             tabela = banco.lerTabelaUsuarios();
+            admins = banco.sessoesAdmins();
+            usuarios = banco.sessoesUsuarios();
         } catch (SQLException e) {
-            erro("Banco de dados", "Nao foi possivel ler a tabela usuarios: " + e.getMessage());
+            erro("Banco de dados", "Nao foi possivel ler o banco: " + e.getMessage());
             return;
         }
+        tabelaAdmins.setItems(FXCollections.observableArrayList(admins));
+        tabelaSessoesUsuarios.setItems(FXCollections.observableArrayList(usuarios));
+        tituloAdmins.setText("Whitelist de admin - tokens de administradores (" + admins.size() + ")");
+        tituloUsuarios.setText("Tokens de usuarios comuns (" + usuarios.size() + ")");
         bancoLido = true;
         colunasBanco = tabela.colunas();
 
@@ -425,6 +467,13 @@ public class ServidorApp extends Application {
         }
 
         if (!abrirBanco()) {
+            return;
+        }
+        // O administrador padrao e garantido a cada inicio do servidor, inclusive depois de Parar
+        try {
+            banco.garantirAdminPadrao();
+        } catch (SQLException e) {
+            erro("Banco de dados", "Nao foi possivel garantir o administrador padrao: " + e.getMessage());
             return;
         }
         try {

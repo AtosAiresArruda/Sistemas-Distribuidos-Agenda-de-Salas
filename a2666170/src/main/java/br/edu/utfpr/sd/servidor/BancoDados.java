@@ -21,6 +21,7 @@ import java.util.List;
 /**
  * Persistencia em SQLite. Uma unica conexao compartilhada; todos os metodos sao
  * synchronized, entao cada operacao (verificar + gravar) e atomica entre as threads dos clientes.
+ * As listas de tokens (ListasTokens) sao alteradas nos mesmos metodos, junto com o banco.
  */
 public class BancoDados {
 
@@ -29,8 +30,14 @@ public class BancoDados {
     private static final ZoneId FUSO = ZoneId.of("America/Sao_Paulo");
     private static final DateTimeFormatter FORMATO_DATA_HORA = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
+    // Protocolo 3.15: conta de administrador padrao, igual em todos os servidores da turma
+    public static final String ADMIN_USER = "admin";
+    public static final String ADMIN_EMAIL = "admin@admin.com";
+    public static final String ADMIN_SENHA = "admin";
+
     private final SecureRandom random = new SecureRandom();
     private final Connection conexao;
+    private final ListasTokens listas = new ListasTokens();
 
     public record Usuario(long id, String user, String email, String role, String createdAt) {
     }
@@ -39,9 +46,18 @@ public class BancoDados {
     public record Tabela(List<String> colunas, List<List<String>> linhas) {
     }
 
+    /** Token ativo e o dono dele, como exibido na interface do servidor. */
+    public record Sessao(String token, String user, String email) {
+    }
+
+    /** Resultado das operacoes de administrador sobre outro usuario. */
+    public enum Resultado { OK, NAO_ENCONTRADO, ULTIMO_ADMIN, USER_EM_USO }
+
     public BancoDados(String arquivo) throws SQLException {
         conexao = DriverManager.getConnection("jdbc:sqlite:" + arquivo);
         criarTabelas();
+        encerrarSessoesAnteriores();
+        garantirAdminPadrao();
     }
 
     private void criarTabelas() throws SQLException {
@@ -67,7 +83,48 @@ public class BancoDados {
         }
     }
 
-    /** Cadastra um usuario comum. Retorna false se o user ou o email ja existirem. */
+    /**
+     * As listas de tokens comecam vazias, e reiniciar o servidor derruba todas as conexoes,
+     * o que pela decisao do projeto conta como logout: os tokens que ficaram ativos sao invalidados.
+     */
+    private void encerrarSessoesAnteriores() throws SQLException {
+        try (Statement st = conexao.createStatement()) {
+            int encerradas = st.executeUpdate("UPDATE tokens SET ativo = 0 WHERE ativo = 1");
+            if (encerradas > 0) {
+                System.out.println(encerradas + " sessao(oes) da execucao anterior invalidada(s).");
+            }
+        }
+    }
+
+    /**
+     * Garante a conta de administrador padrao a cada inicializacao (decisao do projeto, mais forte que a 3.15):
+     * se a conta admin@admin.com existe, volta a ter role admin (senha e user nao mudam); se nao existe,
+     * ela e criada, e uma conta antiga que ocupe o user "admin" com outro email e apagada antes.
+     */
+    public synchronized void garantirAdminPadrao() throws SQLException {
+        Long id = idPor("email", ADMIN_EMAIL);
+        if (id != null) {
+            if (!"admin".equals(buscarUsuario(id).role())) {
+                alterarRole(id, "admin");
+                System.out.println("Administrador padrao " + ADMIN_EMAIL + " voltou a ter role admin.");
+            }
+            return;
+        }
+        Long ocupante = idPor("user", ADMIN_USER);
+        if (ocupante != null) {
+            String email = buscarUsuario(ocupante).email();
+            apagarConta(ocupante);
+            System.out.println("Conta '" + ADMIN_USER + "' (email " + email
+                    + ") removida para criar o administrador padrao.");
+        }
+        inserirUsuario(ADMIN_USER, ADMIN_EMAIL, ADMIN_SENHA, "admin");
+        System.out.println("Administrador padrao criado: " + ADMIN_EMAIL + " / senha " + ADMIN_SENHA + ".");
+    }
+
+    /**
+     * Cadastra um usuario comum. Retorna false se o user ou o email ja existirem,
+     * seja num usuario comum, seja num administrador (todos ficam na mesma tabela).
+     */
     public synchronized boolean cadastrar(String user, String email, String senha) throws SQLException {
         try (PreparedStatement ps = conexao.prepareStatement("SELECT 1 FROM usuarios WHERE user = ? OR email = ?")) {
             ps.setString(1, user);
@@ -76,16 +133,7 @@ public class BancoDados {
                 return false;
             }
         }
-        String salt = HexFormat.of().formatHex(bytesAleatorios(16));
-        try (PreparedStatement ps = conexao.prepareStatement(
-                "INSERT INTO usuarios (user, email, senha_hash, senha_salt, role, created_at) VALUES (?, ?, ?, ?, 'user', ?)")) {
-            ps.setString(1, user);
-            ps.setString(2, email);
-            ps.setString(3, hash(salt, senha));
-            ps.setString(4, salt);
-            ps.setString(5, LocalDateTime.now(FUSO).format(FORMATO_DATA_HORA));
-            ps.executeUpdate();
-        }
+        inserirUsuario(user, email, senha, "user");
         return true;
     }
 
@@ -113,7 +161,7 @@ public class BancoDados {
     }
 
     /**
-     * Abre uma sessao e devolve o novo token.
+     * Abre uma sessao e devolve o novo token, que entra na lista do perfil do usuario (protocolo 3.14).
      * Retorna null se o usuario ja tiver uma sessao ativa (protocolo 3.5).
      */
     public synchronized String abrirSessao(long usuarioId) throws SQLException {
@@ -132,12 +180,13 @@ public class BancoDados {
             ps.setLong(3, System.currentTimeMillis());
             ps.executeUpdate();
         }
+        listas.adicionar(token, buscarUsuario(usuarioId).role());
         return token;
     }
 
     /**
      * Valida o token e renova sua validade (protocolo 3.3).
-     * Retorna o dono do token, ou null se o token nao existir, estiver expirado ou invalidado.
+     * Retorna o dono do token, ou null se o token nao estiver nas listas, estiver expirado ou invalidado.
      */
     public synchronized Usuario usuarioDoToken(String token) throws SQLException {
         Long usuarioId = usuarioDeTokenAtivo(token);
@@ -152,15 +201,17 @@ public class BancoDados {
         return buscarUsuario(usuarioId);
     }
 
+    /** Protocolo 3.14: so um token da whitelist de admin libera as operacoes de administrador. */
+    public synchronized boolean tokenEhAdmin(String token) {
+        return listas.ehAdmin(token);
+    }
+
     /** Invalida o token. Retorna false se ele ja nao era valido. */
     public synchronized boolean invalidarToken(String token) throws SQLException {
         if (usuarioDeTokenAtivo(token) == null) {
             return false;
         }
-        try (PreparedStatement ps = conexao.prepareStatement("UPDATE tokens SET ativo = 0 WHERE token = ?")) {
-            ps.setString(1, token);
-            ps.executeUpdate();
-        }
+        desativarToken(token);
         return true;
     }
 
@@ -205,16 +256,67 @@ public class BancoDados {
         if (usuario != null && "admin".equals(usuario.role()) && contarAdmins() <= 1) {
             return false;
         }
-        // TODO: cancelar as reservas futuras do usuario quando o CRUD de reservas existir
-        try (PreparedStatement ps = conexao.prepareStatement("UPDATE tokens SET ativo = 0 WHERE usuario_id = ?")) {
-            ps.setLong(1, usuarioId);
-            ps.executeUpdate();
-        }
-        try (PreparedStatement ps = conexao.prepareStatement("DELETE FROM usuarios WHERE id = ?")) {
-            ps.setLong(1, usuarioId);
-            ps.executeUpdate();
-        }
+        apagarConta(usuarioId);
         return true;
+    }
+
+    /** Todos os cadastros, em ordem de criacao (admin_list_users). */
+    public synchronized List<Usuario> listarUsuarios() throws SQLException {
+        List<Usuario> usuarios = new ArrayList<>();
+        try (Statement st = conexao.createStatement()) {
+            ResultSet rs = st.executeQuery("SELECT id, user, email, role, created_at FROM usuarios ORDER BY id");
+            while (rs.next()) {
+                usuarios.add(usuario(rs));
+            }
+        }
+        return usuarios;
+    }
+
+    /** Usuario com o user informado, ou null se nao existir. */
+    public synchronized Usuario buscarPorUser(String user) throws SQLException {
+        Long id = idPor("user", user);
+        return id == null ? null : buscarUsuario(id);
+    }
+
+    /**
+     * admin_update_user: altera user, senha e/ou role do usuario alvo; null significa "nao alterar".
+     * Mudar o role move o token ativo do alvo para a outra lista na hora (protocolo 3.14).
+     */
+    public synchronized Resultado atualizarComoAdmin(String alvo, String novoUser, String novaSenha, String novoRole)
+            throws SQLException {
+        Usuario usuario = buscarPorUser(alvo);
+        if (usuario == null) {
+            return Resultado.NAO_ENCONTRADO;
+        }
+        if ("user".equals(novoRole) && "admin".equals(usuario.role()) && contarAdmins() <= 1) {
+            return Resultado.ULTIMO_ADMIN;
+        }
+        if (!atualizar(usuario.id(), novoUser, novaSenha)) {
+            return Resultado.USER_EM_USO;
+        }
+        if (novoRole != null && !novoRole.equals(usuario.role())) {
+            alterarRole(usuario.id(), novoRole);
+        }
+        return Resultado.OK;
+    }
+
+    /** admin_delete_user: apaga o cadastro do alvo e encerra a sessao dele. */
+    public synchronized Resultado removerComoAdmin(String alvo) throws SQLException {
+        Usuario usuario = buscarPorUser(alvo);
+        if (usuario == null) {
+            return Resultado.NAO_ENCONTRADO;
+        }
+        return removerUsuario(usuario.id()) ? Resultado.OK : Resultado.ULTIMO_ADMIN;
+    }
+
+    /** Sessoes de administradores (whitelist) para a interface; tokens vencidos saem das listas antes. */
+    public synchronized List<Sessao> sessoesAdmins() throws SQLException {
+        return sessoes(listas.tokensAdmins());
+    }
+
+    /** Sessoes de usuarios comuns para a interface; tokens vencidos saem das listas antes. */
+    public synchronized List<Sessao> sessoesUsuarios() throws SQLException {
+        return sessoes(listas.tokensUsuarios());
     }
 
     /** Le a tabela usuarios inteira, com todas as colunas, exatamente como esta gravada (usada pela interface). */
@@ -238,21 +340,91 @@ public class BancoDados {
         }
     }
 
+    private List<Sessao> sessoes(List<String> tokens) throws SQLException {
+        List<Sessao> sessoes = new ArrayList<>();
+        for (String token : tokens) {
+            Long usuarioId = usuarioDeTokenAtivo(token);
+            Usuario usuario = usuarioId == null ? null : buscarUsuario(usuarioId);
+            if (usuario != null) {
+                sessoes.add(new Sessao(token, usuario.user(), usuario.email()));
+            }
+        }
+        return sessoes;
+    }
+
+    private void inserirUsuario(String user, String email, String senha, String role) throws SQLException {
+        String salt = HexFormat.of().formatHex(bytesAleatorios(16));
+        try (PreparedStatement ps = conexao.prepareStatement(
+                "INSERT INTO usuarios (user, email, senha_hash, senha_salt, role, created_at) VALUES (?, ?, ?, ?, ?, ?)")) {
+            ps.setString(1, user);
+            ps.setString(2, email);
+            ps.setString(3, hash(salt, senha));
+            ps.setString(4, salt);
+            ps.setString(5, role);
+            ps.setString(6, LocalDateTime.now(FUSO).format(FORMATO_DATA_HORA));
+            ps.executeUpdate();
+        }
+    }
+
+    /** Grava o novo role e move os tokens ativos do usuario para a lista correspondente. */
+    private void alterarRole(long usuarioId, String role) throws SQLException {
+        try (PreparedStatement ps = conexao.prepareStatement("UPDATE usuarios SET role = ? WHERE id = ?")) {
+            ps.setString(1, role);
+            ps.setLong(2, usuarioId);
+            ps.executeUpdate();
+        }
+        for (String token : tokensAtivos(usuarioId)) {
+            listas.mover(token, role);
+        }
+    }
+
+    /** Apaga o cadastro e invalida os tokens do usuario, no banco e nas listas. */
+    private void apagarConta(long usuarioId) throws SQLException {
+        // TODO: apagar as reservas do usuario (protocolo 3.13) quando o CRUD de reservas existir
+        for (String token : tokensAtivos(usuarioId)) {
+            listas.remover(token);
+        }
+        try (PreparedStatement ps = conexao.prepareStatement("UPDATE tokens SET ativo = 0 WHERE usuario_id = ?")) {
+            ps.setLong(1, usuarioId);
+            ps.executeUpdate();
+        }
+        try (PreparedStatement ps = conexao.prepareStatement("DELETE FROM usuarios WHERE id = ?")) {
+            ps.setLong(1, usuarioId);
+            ps.executeUpdate();
+        }
+    }
+
     private Usuario buscarUsuario(long id) throws SQLException {
         try (PreparedStatement ps = conexao.prepareStatement(
                 "SELECT id, user, email, role, created_at FROM usuarios WHERE id = ?")) {
             ps.setLong(1, id);
             ResultSet rs = ps.executeQuery();
-            if (!rs.next()) {
-                return null;
-            }
-            return new Usuario(rs.getLong("id"), rs.getString("user"), rs.getString("email"),
-                    rs.getString("role"), rs.getString("created_at"));
+            return rs.next() ? usuario(rs) : null;
         }
     }
 
-    /** Dono do token se ele estiver ativo e dentro da validade; tokens vencidos sao desativados aqui. */
+    private static Usuario usuario(ResultSet rs) throws SQLException {
+        return new Usuario(rs.getLong("id"), rs.getString("user"), rs.getString("email"),
+                rs.getString("role"), rs.getString("created_at"));
+    }
+
+    /** Id do usuario cujo campo ("user" ou "email") tem o valor informado, ou null. */
+    private Long idPor(String campo, String valor) throws SQLException {
+        try (PreparedStatement ps = conexao.prepareStatement("SELECT id FROM usuarios WHERE " + campo + " = ?")) {
+            ps.setString(1, valor);
+            ResultSet rs = ps.executeQuery();
+            return rs.next() ? rs.getLong("id") : null;
+        }
+    }
+
+    /**
+     * Dono do token se ele estiver nas listas e dentro da validade; tokens vencidos sao desativados aqui.
+     * As listas sao a fonte da sessao ativa; o banco guarda o ultimo uso e o historico de tokens.
+     */
     private Long usuarioDeTokenAtivo(String token) throws SQLException {
+        if (!listas.ativo(token)) {
+            return null;
+        }
         long usuarioId;
         long ultimoUso;
         try (PreparedStatement ps = conexao.prepareStatement(
@@ -260,6 +432,7 @@ public class BancoDados {
             ps.setString(1, token);
             ResultSet rs = ps.executeQuery();
             if (!rs.next()) {
+                listas.remover(token);
                 return null;
             }
             usuarioId = rs.getLong("usuario_id");
@@ -272,7 +445,7 @@ public class BancoDados {
         return usuarioId;
     }
 
-    private boolean possuiSessaoAtiva(long usuarioId) throws SQLException {
+    private List<String> tokensAtivos(long usuarioId) throws SQLException {
         List<String> tokens = new ArrayList<>();
         try (PreparedStatement ps = conexao.prepareStatement(
                 "SELECT token FROM tokens WHERE usuario_id = ? AND ativo = 1")) {
@@ -282,7 +455,11 @@ public class BancoDados {
                 tokens.add(rs.getString("token"));
             }
         }
-        for (String token : tokens) {
+        return tokens;
+    }
+
+    private boolean possuiSessaoAtiva(long usuarioId) throws SQLException {
+        for (String token : tokensAtivos(usuarioId)) {
             if (usuarioDeTokenAtivo(token) != null) {
                 return true;
             }
@@ -302,6 +479,7 @@ public class BancoDados {
             ps.setString(1, token);
             ps.executeUpdate();
         }
+        listas.remover(token);
     }
 
     private int contarAdmins() throws SQLException {

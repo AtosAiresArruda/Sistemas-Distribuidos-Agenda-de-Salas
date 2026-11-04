@@ -59,6 +59,13 @@ public final class ValidacaoCadastro {
         return "Email invalido: " + problema + ". " + FORMATO_EMAIL;
     }
 
+    /** target_user das operacoes admin_* tem o mesmo formato de user. */
+    public static String targetUser(String alvo) {
+        String problema = user(alvo);
+        return problema == null ? null : problema.replaceFirst("^Usuario invalido", "Usuario alvo invalido")
+                .replace("o usuario ", "o usuario alvo ");
+    }
+
     public static String user(String user) {
         if (USER.matcher(user).matches()) {
             return null;

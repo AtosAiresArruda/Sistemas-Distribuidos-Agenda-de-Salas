@@ -33,7 +33,20 @@ Regras de consulta:
 **Requisito crítico:** a especificação deve ser seguida **à risca, em todos os detalhes**: nomes de campos, valores, códigos de resposta e regras de negócio. O protocolo é alterado ao longo do semestre. **Antes de implementar ou alterar uma operação, releia o protocolo atualizado** e não presuma formatos.
 
 ### Decisões do usuário que divergem do protocolo
-- **Queda de conexão = logout.** Qualquer encerramento da conexão (cliente fecha o app, processo morto, erro de I/O, timeout de inatividade de 300 s ou servidor fechando a conexão) invalida o token da sessão daquela conexão (remove da whitelist). Isso substitui a regra 1.9, que mantinha o token válido após o timeout.
+- **Queda de conexão = logout.** Qualquer encerramento da conexão (cliente fecha o app, processo morto, erro de I/O, timeout de inatividade de 300 s ou servidor fechando a conexão) invalida o token da sessão daquela conexão (remove da whitelist). Isso substitui a regra 1.9, que mantinha o token válido após o timeout. Pelo mesmo motivo, **reiniciar o servidor invalida todas as sessões** que ficaram ativas no banco.
+- **Admin padrão a cada inicialização** (mais forte que a regra 3.15, que só cria quando não há nenhum admin). Ao abrir o banco e a cada "Iniciar servidor":
+  - conta `admin@admin.com` existe → volta a ter role `admin` (senha e user não mudam);
+  - não existe, mas outra conta usa o user `admin` (ex.: banco da EP-1) → essa conta é **apagada** (cadastro, sessões e, quando existirem, reservas) e a conta padrão é criada;
+  - nenhuma das duas → cria `admin` / `admin@admin.com` / senha `admin` / role `admin`.
+- **Duas listas de tokens** (`ListasTokens`): usuários comuns e administradores. Todo token é validado por elas; só a lista de admin (whitelist da regra 3.14) libera as operações de admin. As contas ficam numa única tabela `usuarios` com `role`, então o `register` recusa (409) email ou user já usado por um usuário comum ou por um admin.
+- **Horários das salas como flags (EP-2.2, extensão do protocolo).** Campo opcional `schedule: [{"day": "...", "slot": "..."}]` em `create_room`, `update_room`, `read_room` e `list_rooms`. `day` ∈ segunda, terca, quarta, quinta, sexta, sabado; `slot` ∈ M1–M6, T1–T6, N1–N5 (blocos fixos, sem hora em número). No `create_room`, ausente = sala sem horários; no `update_room`, ausente = mantém, presente = substitui a lista inteira. Par inválido ou repetido → 400 "Dados da sala em formato invalido". O cliente aceita resposta sem `schedule` (servidores dos colegas).
+
+### Pontos que o protocolo não define (decididos com o usuário)
+- `update_room` reduzindo `capacity` abaixo dos `participants` de uma reserva futura → 409 "Sala possui reservas ativas" (pendência 3 do protocolo).
+- `delete_room` apaga junto as reservas **passadas** e os horários da sala; reserva ativa = `date` + `end_time` ainda não passou.
+- `list_rooms` com o trio de filtros: sala `inactive` → `"available": "false"`. O `schedule` não entra no cálculo.
+- Token ausente → 401 (pendência 1 do protocolo).
+- **A revisar:** nome de sala "único" com comparação exata ("Sala A" ≠ "sala a"), como está descrito no protocolo.
 
 ### Drive antigo (SD-BCC) — só quando o usuário pedir
 Índice em `INDEX.md`. Leia pelo conector do Google Drive, usando os IDs abaixo.
@@ -66,6 +79,26 @@ Condições obrigatórias da avaliação:
 - O cliente deve pedir o **IP** e a **porta** do servidor.
 - Todo cliente deve trocar mensagens com qualquer servidor da turma, e todo servidor com qualquer cliente. Por isso o protocolo precisa ser seguido à risca.
 - Nenhuma alteração no código é permitida durante a avaliação, nem para corrigir erro crítico. Teste tudo antes.
+
+## Entrega-Parcial-02
+Dividida em duas partes:
+- **EP-2.1 — Administradores.** Status: implementada (2026-11-04), aguardando teste nas interfaces e commit.
+- **EP-2.2 — Salas.** Status: planejada. Inclui a tabela `reservas` e o `list_reservations` (só leitura); o `create_reservation` fica para a entrega seguinte.
+
+Itens avaliados:
+
+| Item | Cliente | Item | Servidor | Parte | Mensagens |
+|---|---|---|---|---|---|
+| — | — | h) | Envia corretamente as mensagens de erro | 2.1 e 2.2 | todas |
+| a) | ADM lista todos os usuários (R) | i) | idem | 2.1 | `admin_list_users` |
+| b) | ADM atualiza dados de usuário diferente do seu (U) | j) | idem | 2.1 | `admin_update_user` (+ `admin_read_user`) |
+| c) | ADM exclui cadastro de usuário comum (D) | k) | idem | 2.1 | `admin_delete_user` |
+| d) | ADM cadastra sala (C): nome, dias da semana, horários, capacidade | l) | idem | 2.2 | `create_room` |
+| e) | ADM lê as salas (R): horários, capacidade, status, quem reservou e quando | m) | idem | 2.2 | `list_rooms`, `read_room`, `list_reservations` (`scope: "all"`) |
+| f) | ADM atualiza sala (U): nome, horários, capacidade, status | n) | idem | 2.2 | `update_room` |
+| g) | ADM remove sala (D) | o) | idem | 2.2 | `delete_room` |
+
+Status "livre ou indisponível" = `room_status` `active` / `inactive`.
 
 ## GitHub
 1. Para tarefas envolvendo git, utilize apenas ações bash. 

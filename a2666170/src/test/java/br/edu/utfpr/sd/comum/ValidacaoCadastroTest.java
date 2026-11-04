@@ -19,6 +19,13 @@ class ValidacaoCadastroTest {
     }
 
     @Test
+    void validaUsuarioAlvo() {
+        assertNull(ValidacaoCadastro.targetUser("joao"));
+        assertTrue(ValidacaoCadastro.targetUser("").startsWith("Usuario alvo invalido: o usuario alvo esta vazio"));
+        assertTrue(ValidacaoCadastro.targetUser("jo4o").contains("caracteres nao permitidos"));
+    }
+
+    @Test
     void explicaEmailComMaiusculas() {
         assertTrue(ValidacaoCadastro.email("Joao.Silva@email.com").contains("letras maiusculas"));
         assertTrue(ValidacaoCadastro.email("joao@EMAIL.COM").contains("letras maiusculas"));

@@ -3,6 +3,7 @@ package br.edu.utfpr.sd.servidor;
 import br.edu.utfpr.sd.comum.ConexaoJson;
 import br.edu.utfpr.sd.comum.Json;
 import br.edu.utfpr.sd.servidor.BancoDados.Usuario;
+import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParseException;
@@ -28,7 +29,12 @@ public class TratadorCliente extends Thread {
     private static final Pattern EMAIL = Pattern.compile("^[a-z0-9._-]+@[a-z0-9-]+(\\.[a-z0-9-]+)*\\.[a-z]{2,}$");
     private static final Pattern TOKEN = Pattern.compile("^[a-f0-9]{64}$");
 
+    // Dicionario: role so aceita "user" e "admin" (case-sensitive)
+    private static final Set<String> ROLES = Set.of("user", "admin");
+
     private static final String TOKEN_INVALIDO = "Token invalido ou expirado";
+    private static final String USUARIO_NAO_ENCONTRADO = "Usuario nao encontrado";
+    private static final String ULTIMO_ADMIN = "Nao e possivel remover o ultimo administrador";
 
     /** Interrompe a operacao com uma resposta de erro (status e message da aba de mensagens). */
     private static final class Falha extends Exception {
@@ -152,6 +158,10 @@ public class TratadorCliente extends Thread {
                 case "read_user" -> readUser(requisicao);
                 case "update_user" -> updateUser(requisicao);
                 case "delete_user" -> deleteUser(requisicao);
+                case "admin_list_users" -> adminListUsers(requisicao);
+                case "admin_read_user" -> adminReadUser(requisicao);
+                case "admin_update_user" -> adminUpdateUser(requisicao);
+                case "admin_delete_user" -> adminDeleteUser(requisicao);
                 default -> Json.resposta("error", "400", "Operacao desconhecida");
             };
         } catch (Falha f) {
@@ -262,10 +272,105 @@ public class TratadorCliente extends Thread {
             throw new Falha("403", "Senha incorreta");
         }
         if (!banco.removerUsuario(usuario.id())) {
-            throw new Falha("403", "Nao e possivel remover o ultimo administrador");
+            throw new Falha("403", ULTIMO_ADMIN);
         }
         esquecerToken(token);
         return Json.resposta("delete_user_response", "200", "Usuario removido com sucesso");
+    }
+
+    private JsonObject adminListUsers(JsonObject req) throws Exception {
+        sessaoAdmin(token(req, "Token em formato invalido"));
+
+        // A senha nunca e devolvida
+        JsonArray lista = new JsonArray();
+        for (Usuario usuario : banco.listarUsuarios()) {
+            JsonObject item = new JsonObject();
+            item.addProperty("user", usuario.user());
+            item.addProperty("email", usuario.email());
+            item.addProperty("role", usuario.role());
+            lista.add(item);
+        }
+        JsonObject resposta = Json.resposta("admin_list_users_response", "200", "Consulta realizada com sucesso");
+        resposta.addProperty("count", String.valueOf(lista.size()));
+        resposta.add("users", lista);
+        return resposta;
+    }
+
+    private JsonObject adminReadUser(JsonObject req) throws Exception {
+        String formatoInvalido = "Dados em formato invalido";
+        String token = token(req, formatoInvalido);
+        String alvo = minusculas(texto(req, "target_user", formatoInvalido));
+        if (!confere(USER, alvo)) {
+            throw new Falha("400", formatoInvalido);
+        }
+
+        sessaoAdmin(token);
+        Usuario usuario = banco.buscarPorUser(alvo);
+        if (usuario == null) {
+            throw new Falha("404", USUARIO_NAO_ENCONTRADO);
+        }
+        JsonObject resposta = Json.resposta("admin_read_user_response", "200", "Consulta realizada com sucesso");
+        resposta.addProperty("user", usuario.user());
+        resposta.addProperty("email", usuario.email());
+        resposta.addProperty("role", usuario.role());
+        resposta.addProperty("created_at", usuario.createdAt());
+        return resposta;
+    }
+
+    private JsonObject adminUpdateUser(JsonObject req) throws Exception {
+        String formatoInvalido = "Dados em formato invalido";
+        // Mesmas regras do update_user: o email nao pode ser alterado
+        if (req.has("email")) {
+            throw new Falha("400", formatoInvalido);
+        }
+        String token = token(req, formatoInvalido);
+        String alvo = minusculas(texto(req, "target_user", formatoInvalido));
+        String user = minusculas(texto(req, "user", formatoInvalido));
+        String password = texto(req, "password", formatoInvalido);
+        String role = texto(req, "role", formatoInvalido);
+        // String vazia significa "nao alterar"
+        if (!confere(USER, alvo)
+                || (!user.isEmpty() && !confere(USER, user))
+                || (!password.isEmpty() && !confere(PASSWORD, password))
+                || (!role.isEmpty() && !ROLES.contains(role))) {
+            throw new Falha("400", formatoInvalido);
+        }
+        // Regra 2.13 (v2.4): os tres campos vazios nao alteram nada
+        if (user.isEmpty() && password.isEmpty() && role.isEmpty()) {
+            throw new Falha("400", "Nenhum dado para atualizar");
+        }
+
+        sessaoAdmin(token);
+        switch (banco.atualizarComoAdmin(alvo, vazioComoNulo(user), vazioComoNulo(password), vazioComoNulo(role))) {
+            case NAO_ENCONTRADO -> throw new Falha("404", USUARIO_NAO_ENCONTRADO);
+            case ULTIMO_ADMIN -> throw new Falha("403", ULTIMO_ADMIN);
+            case USER_EM_USO -> throw new Falha("409", "Usuario ja esta em uso");
+            case OK -> {
+            }
+        }
+        return Json.resposta("admin_update_user_response", "200", "Dados atualizados com sucesso");
+    }
+
+    private JsonObject adminDeleteUser(JsonObject req) throws Exception {
+        String formatoInvalido = "Dados em formato invalido";
+        String token = token(req, formatoInvalido);
+        String alvo = minusculas(texto(req, "target_user", formatoInvalido));
+        if (!confere(USER, alvo)) {
+            throw new Falha("400", formatoInvalido);
+        }
+
+        Usuario autor = sessaoAdmin(token);
+        switch (banco.removerComoAdmin(alvo)) {
+            case NAO_ENCONTRADO -> throw new Falha("404", USUARIO_NAO_ENCONTRADO);
+            case ULTIMO_ADMIN -> throw new Falha("403", ULTIMO_ADMIN);
+            default -> {
+            }
+        }
+        // O admin removeu a propria conta: o token ja foi invalidado junto
+        if (autor.user().equals(alvo)) {
+            esquecerToken(token);
+        }
+        return Json.resposta("admin_delete_user_response", "200", "Usuario removido com sucesso");
     }
 
     /**
@@ -294,6 +399,18 @@ public class TratadorCliente extends Thread {
         return usuario;
     }
 
+    /**
+     * Dono de um token de administrador. Protocolo 3.14: so a whitelist de admin libera a operacao;
+     * token valido que esta so na lista de usuarios comuns responde 403.
+     */
+    private Usuario sessaoAdmin(String token) throws Exception {
+        Usuario usuario = sessao(token);
+        if (!banco.tokenEhAdmin(token)) {
+            throw new Falha("403", "Permissao insuficiente");
+        }
+        return usuario;
+    }
+
     /** O token ja foi invalidado pela propria operacao; nada a fazer quando a conexao cair. */
     private void esquecerToken(String token) {
         tokensDaConexao.remove(token);
@@ -319,5 +436,10 @@ public class TratadorCliente extends Thread {
     // Protocolo 2.12: 'user' e 'email' sao sempre gravados em minusculas
     private static String minusculas(String valor) {
         return valor.toLowerCase(Locale.ROOT);
+    }
+
+    /** Em atualizacao, "" significa "nao alterar" (protocolo 2.11); o banco recebe null nesse caso. */
+    private static String vazioComoNulo(String valor) {
+        return valor.isEmpty() ? null : valor;
     }
 }
