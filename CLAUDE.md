@@ -82,8 +82,8 @@ Condições obrigatórias da avaliação:
 
 ## Entrega-Parcial-02
 Dividida em duas partes:
-- **EP-2.1 — Administradores.** Status: implementada (2026-11-04), aguardando teste nas interfaces e commit.
-- **EP-2.2 — Salas.** Status: planejada. Inclui a tabela `reservas` e o `list_reservations` (só leitura); o `create_reservation` fica para a entrega seguinte.
+- **EP-2.1 — Administradores.** Status: implementada e commitada (`1a89147`, 2026-11-04). Login, `admin_list_users` e `admin_read_user` conferidos na interface; falta conferir update, delete e os erros.
+- **EP-2.2 — Salas.** Status: implementada (2026-11-04), aguardando teste nas interfaces e commit. Inclui as tabelas `salas`, `sala_horarios` e `reservas` e o `list_reservations` (só leitura); o `create_reservation` fica para a entrega seguinte. No cliente, a aba Salas só aparece para admin (no servidor, `list_rooms` e `read_room` valem para qualquer usuário logado). No `list_rooms`, os filtros só passam pela regex do protocolo; `end_time <= start_time` não é recusado (o protocolo não define).
 
 Itens avaliados:
 

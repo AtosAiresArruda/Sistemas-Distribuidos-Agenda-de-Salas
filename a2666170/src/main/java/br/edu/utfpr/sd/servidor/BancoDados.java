@@ -1,5 +1,8 @@
 package br.edu.utfpr.sd.servidor;
 
+import br.edu.utfpr.sd.comum.Horarios;
+import br.edu.utfpr.sd.comum.Horarios.Horario;
+import br.edu.utfpr.sd.comum.Json;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -50,8 +53,26 @@ public class BancoDados {
     public record Sessao(String token, String user, String email) {
     }
 
-    /** Resultado das operacoes de administrador sobre outro usuario. */
-    public enum Resultado { OK, NAO_ENCONTRADO, ULTIMO_ADMIN, USER_EM_USO }
+    /** Sala com seus horarios (schedule, extensao do projeto) em ordem de dia e bloco. */
+    public record Sala(long id, String name, int capacity, String location, List<String> resources,
+                       String roomStatus, List<Horario> schedule) {
+    }
+
+    /** Reserva como devolvida no list_reservations: "roomName" e o nome da sala e "user" e o dono. */
+    public record Reserva(long id, long roomId, String roomName, String user, String date, String startTime,
+                          String endTime, String topic, int participants) {
+    }
+
+    /** Novos valores de uma sala no update_room; null significa "nao alterar". */
+    public record AlteracaoSala(String name, Integer capacity, String location, List<String> resources,
+                                String roomStatus, List<Horario> schedule) {
+    }
+
+    /** Resultado das operacoes de administrador sobre outro usuario ou sobre uma sala. */
+    public enum Resultado { OK, NAO_ENCONTRADO, ULTIMO_ADMIN, USER_EM_USO, NOME_EM_USO, RESERVAS_ATIVAS }
+
+    // Tabelas que a interface do servidor pode exibir
+    public static final List<String> TABELAS = List.of("usuarios", "tokens", "salas", "sala_horarios", "reservas");
 
     public BancoDados(String arquivo) throws SQLException {
         conexao = DriverManager.getConnection("jdbc:sqlite:" + arquivo);
@@ -79,6 +100,35 @@ public class BancoDados {
                         usuario_id INTEGER NOT NULL,
                         ultimo_uso INTEGER NOT NULL,
                         ativo      INTEGER NOT NULL
+                    )""");
+            // room_id = id; AUTOINCREMENT garante que um id removido nunca volta (room_id e imutavel)
+            st.execute("""
+                    CREATE TABLE IF NOT EXISTS salas (
+                        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                        name        TEXT NOT NULL UNIQUE,
+                        capacity    INTEGER NOT NULL,
+                        location    TEXT NOT NULL,
+                        resources   TEXT NOT NULL,
+                        room_status TEXT NOT NULL
+                    )""");
+            st.execute("""
+                    CREATE TABLE IF NOT EXISTS sala_horarios (
+                        sala_id INTEGER NOT NULL,
+                        day     TEXT NOT NULL,
+                        slot    TEXT NOT NULL,
+                        PRIMARY KEY (sala_id, day, slot)
+                    )""");
+            // Ainda nao ha create_reservation; a tabela ja existe para list_reservations, delete_room e update_room
+            st.execute("""
+                    CREATE TABLE IF NOT EXISTS reservas (
+                        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                        sala_id      INTEGER NOT NULL,
+                        usuario_id   INTEGER NOT NULL,
+                        date         TEXT NOT NULL,
+                        start_time   TEXT NOT NULL,
+                        end_time     TEXT NOT NULL,
+                        topic        TEXT NOT NULL,
+                        participants INTEGER NOT NULL
                     )""");
         }
     }
@@ -319,10 +369,184 @@ public class BancoDados {
         return sessoes(listas.tokensUsuarios());
     }
 
-    /** Le a tabela usuarios inteira, com todas as colunas, exatamente como esta gravada (usada pela interface). */
-    public synchronized Tabela lerTabelaUsuarios() throws SQLException {
+    /**
+     * create_room: cadastra a sala com room_status "active".
+     * Retorna o room_id gerado, ou null se ja existir uma sala com o mesmo nome (comparacao exata).
+     */
+    public synchronized Long criarSala(String name, int capacity, String location, List<String> resources,
+                                       List<Horario> schedule) throws SQLException {
+        if (idSalaPorNome(name) != null) {
+            return null;
+        }
+        long id;
+        try (PreparedStatement ps = conexao.prepareStatement(
+                "INSERT INTO salas (name, capacity, location, resources, room_status) VALUES (?, ?, ?, ?, 'active')",
+                Statement.RETURN_GENERATED_KEYS)) {
+            ps.setString(1, name);
+            ps.setInt(2, capacity);
+            ps.setString(3, location);
+            ps.setString(4, Json.GSON.toJson(resources));
+            ps.executeUpdate();
+            ResultSet chave = ps.getGeneratedKeys();
+            chave.next();
+            id = chave.getLong(1);
+        }
+        gravarHorarios(id, schedule);
+        return id;
+    }
+
+    /** list_rooms: todas as salas em ordem de room_id; minCapacity null = sem filtro. */
+    public synchronized List<Sala> listarSalas(Integer minCapacity) throws SQLException {
+        List<Long> ids = new ArrayList<>();
+        try (PreparedStatement ps = conexao.prepareStatement("SELECT id FROM salas WHERE capacity >= ? ORDER BY id")) {
+            ps.setInt(1, minCapacity == null ? 0 : minCapacity);
+            ResultSet rs = ps.executeQuery();
+            while (rs.next()) {
+                ids.add(rs.getLong("id"));
+            }
+        }
+        List<Sala> salas = new ArrayList<>();
+        for (long id : ids) {
+            salas.add(buscarSala(id));
+        }
+        return salas;
+    }
+
+    /** Sala com o room_id informado, ou null se nao existir. */
+    public synchronized Sala buscarSala(long id) throws SQLException {
+        try (PreparedStatement ps = conexao.prepareStatement("SELECT * FROM salas WHERE id = ?")) {
+            ps.setLong(1, id);
+            ResultSet rs = ps.executeQuery();
+            if (!rs.next()) {
+                return null;
+            }
+            List<String> resources = List.of(Json.GSON.fromJson(rs.getString("resources"), String[].class));
+            return new Sala(id, rs.getString("name"), rs.getInt("capacity"), rs.getString("location"),
+                    resources, rs.getString("room_status"), horarios(id));
+        }
+    }
+
+    /**
+     * Disponibilidade no list_rooms: false se a sala estiver inactive ou tiver reserva que conflite com o periodo.
+     * Ha conflito quando novo_inicio < fim_existente e novo_fim > inicio_existente; encostar nao conflita (regra 5.4).
+     * HH:MM com dois digitos permite comparar os horarios como texto.
+     */
+    public synchronized boolean disponivel(Sala sala, String date, String startTime, String endTime) throws SQLException {
+        if (!"active".equals(sala.roomStatus())) {
+            return false;
+        }
+        try (PreparedStatement ps = conexao.prepareStatement(
+                "SELECT 1 FROM reservas WHERE sala_id = ? AND date = ? AND start_time < ? AND end_time > ?")) {
+            ps.setLong(1, sala.id());
+            ps.setString(2, date);
+            ps.setString(3, endTime);
+            ps.setString(4, startTime);
+            return !ps.executeQuery().next();
+        }
+    }
+
+    /**
+     * update_room: aplica so os campos nao nulos. resources sempre vem (lista completa);
+     * schedule null mantem os horarios. Nome de outra sala → NOME_EM_USO; capacidade menor que os
+     * participants de uma reserva ativa → RESERVAS_ATIVAS.
+     */
+    public synchronized Resultado atualizarSala(long id, AlteracaoSala alteracao) throws SQLException {
+        if (buscarSala(id) == null) {
+            return Resultado.NAO_ENCONTRADO;
+        }
+        if (alteracao.name() != null) {
+            Long outra = idSalaPorNome(alteracao.name());
+            if (outra != null && outra != id) {
+                return Resultado.NOME_EM_USO;
+            }
+        }
+        if (alteracao.capacity() != null) {
+            try (PreparedStatement ps = conexao.prepareStatement(
+                    "SELECT 1 FROM reservas WHERE sala_id = ? AND participants > ? AND date || ' ' || end_time > ?")) {
+                ps.setLong(1, id);
+                ps.setInt(2, alteracao.capacity());
+                ps.setString(3, agora());
+                if (ps.executeQuery().next()) {
+                    return Resultado.RESERVAS_ATIVAS;
+                }
+            }
+        }
+        atualizarColuna(id, "name", alteracao.name());
+        atualizarColuna(id, "capacity", alteracao.capacity());
+        atualizarColuna(id, "location", alteracao.location());
+        atualizarColuna(id, "resources", alteracao.resources() == null ? null : Json.GSON.toJson(alteracao.resources()));
+        atualizarColuna(id, "room_status", alteracao.roomStatus());
+        if (alteracao.schedule() != null) {
+            gravarHorarios(id, alteracao.schedule());
+        }
+        return Resultado.OK;
+    }
+
+    /**
+     * delete_room: recusa (RESERVAS_ATIVAS) se houver reserva que ainda nao terminou;
+     * senao apaga a sala, os horarios e as reservas passadas dela.
+     */
+    public synchronized Resultado removerSala(long id) throws SQLException {
+        if (buscarSala(id) == null) {
+            return Resultado.NAO_ENCONTRADO;
+        }
+        try (PreparedStatement ps = conexao.prepareStatement(
+                "SELECT 1 FROM reservas WHERE sala_id = ? AND date || ' ' || end_time > ?")) {
+            ps.setLong(1, id);
+            ps.setString(2, agora());
+            if (ps.executeQuery().next()) {
+                return Resultado.RESERVAS_ATIVAS;
+            }
+        }
+        for (String sql : List.of("DELETE FROM reservas WHERE sala_id = ?", "DELETE FROM sala_horarios WHERE sala_id = ?",
+                "DELETE FROM salas WHERE id = ?")) {
+            try (PreparedStatement ps = conexao.prepareStatement(sql)) {
+                ps.setLong(1, id);
+                ps.executeUpdate();
+            }
+        }
+        return Resultado.OK;
+    }
+
+    /**
+     * list_reservations: reservas em ordem de data e horario.
+     * usuarioId null = todas (scope "all"); date e roomId null = sem filtro.
+     */
+    public synchronized List<Reserva> listarReservas(Long usuarioId, String date, Long roomId) throws SQLException {
+        String sql = """
+                SELECT r.id, r.sala_id, s.name, u.user, r.date, r.start_time, r.end_time, r.topic, r.participants
+                FROM reservas r JOIN salas s ON s.id = r.sala_id JOIN usuarios u ON u.id = r.usuario_id
+                WHERE (? IS NULL OR r.usuario_id = ?) AND (? IS NULL OR r.date = ?) AND (? IS NULL OR r.sala_id = ?)
+                ORDER BY r.date, r.start_time, r.id""";
+        List<Reserva> reservas = new ArrayList<>();
+        try (PreparedStatement ps = conexao.prepareStatement(sql)) {
+            ps.setObject(1, usuarioId);
+            ps.setObject(2, usuarioId);
+            ps.setObject(3, date);
+            ps.setObject(4, date);
+            ps.setObject(5, roomId);
+            ps.setObject(6, roomId);
+            ResultSet rs = ps.executeQuery();
+            while (rs.next()) {
+                reservas.add(new Reserva(rs.getLong(1), rs.getLong(2), rs.getString(3), rs.getString(4),
+                        rs.getString(5), rs.getString(6), rs.getString(7), rs.getString(8), rs.getInt(9)));
+            }
+        }
+        return reservas;
+    }
+
+    /** Le a tabela usuarios inteira (usada pela interface e pelos testes). */
+    public Tabela lerTabelaUsuarios() throws SQLException {
+        return lerTabela("usuarios");
+    }
+
+    /** Le uma das TABELAS inteira, com todas as colunas, exatamente como esta gravada (usada pela interface). */
+    public synchronized Tabela lerTabela(String nome) throws SQLException {
+        if (!TABELAS.contains(nome)) {
+            throw new IllegalArgumentException("Tabela desconhecida: " + nome);
+        }
         try (Statement st = conexao.createStatement()) {
-            ResultSet rs = st.executeQuery("SELECT * FROM usuarios ORDER BY id");
+            ResultSet rs = st.executeQuery("SELECT * FROM " + nome + " ORDER BY rowid");
             ResultSetMetaData meta = rs.getMetaData();
             List<String> colunas = new ArrayList<>();
             for (int i = 1; i <= meta.getColumnCount(); i++) {
@@ -352,6 +576,60 @@ public class BancoDados {
         return sessoes;
     }
 
+    private Long idSalaPorNome(String name) throws SQLException {
+        try (PreparedStatement ps = conexao.prepareStatement("SELECT id FROM salas WHERE name = ?")) {
+            ps.setString(1, name);
+            ResultSet rs = ps.executeQuery();
+            return rs.next() ? rs.getLong("id") : null;
+        }
+    }
+
+    private List<Horario> horarios(long salaId) throws SQLException {
+        List<Horario> horarios = new ArrayList<>();
+        try (PreparedStatement ps = conexao.prepareStatement("SELECT day, slot FROM sala_horarios WHERE sala_id = ?")) {
+            ps.setLong(1, salaId);
+            ResultSet rs = ps.executeQuery();
+            while (rs.next()) {
+                horarios.add(new Horario(rs.getString("day"), rs.getString("slot")));
+            }
+        }
+        horarios.sort(Horarios.ORDEM);
+        return horarios;
+    }
+
+    /** Substitui os horarios da sala pela lista informada. */
+    private void gravarHorarios(long salaId, List<Horario> schedule) throws SQLException {
+        try (PreparedStatement ps = conexao.prepareStatement("DELETE FROM sala_horarios WHERE sala_id = ?")) {
+            ps.setLong(1, salaId);
+            ps.executeUpdate();
+        }
+        try (PreparedStatement ps = conexao.prepareStatement("INSERT INTO sala_horarios (sala_id, day, slot) VALUES (?, ?, ?)")) {
+            for (Horario horario : schedule) {
+                ps.setLong(1, salaId);
+                ps.setString(2, horario.day());
+                ps.setString(3, horario.slot());
+                ps.executeUpdate();
+            }
+        }
+    }
+
+    /** Atualiza uma coluna da sala; valor null significa "nao alterar". */
+    private void atualizarColuna(long salaId, String coluna, Object valor) throws SQLException {
+        if (valor == null) {
+            return;
+        }
+        try (PreparedStatement ps = conexao.prepareStatement("UPDATE salas SET " + coluna + " = ? WHERE id = ?")) {
+            ps.setObject(1, valor);
+            ps.setLong(2, salaId);
+            ps.executeUpdate();
+        }
+    }
+
+    /** Data e hora local do servidor no formato "AAAA-MM-DD HH:MM", comparavel com date || ' ' || end_time. */
+    private static String agora() {
+        return LocalDateTime.now(FUSO).format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"));
+    }
+
     private void inserirUsuario(String user, String email, String senha, String role) throws SQLException {
         String salt = HexFormat.of().formatHex(bytesAleatorios(16));
         try (PreparedStatement ps = conexao.prepareStatement(
@@ -378,11 +656,14 @@ public class BancoDados {
         }
     }
 
-    /** Apaga o cadastro e invalida os tokens do usuario, no banco e nas listas. */
+    /** Apaga o cadastro, todas as reservas (protocolo 3.13) e invalida os tokens do usuario, no banco e nas listas. */
     private void apagarConta(long usuarioId) throws SQLException {
-        // TODO: apagar as reservas do usuario (protocolo 3.13) quando o CRUD de reservas existir
         for (String token : tokensAtivos(usuarioId)) {
             listas.remover(token);
+        }
+        try (PreparedStatement ps = conexao.prepareStatement("DELETE FROM reservas WHERE usuario_id = ?")) {
+            ps.setLong(1, usuarioId);
+            ps.executeUpdate();
         }
         try (PreparedStatement ps = conexao.prepareStatement("UPDATE tokens SET ativo = 0 WHERE usuario_id = ?")) {
             ps.setLong(1, usuarioId);

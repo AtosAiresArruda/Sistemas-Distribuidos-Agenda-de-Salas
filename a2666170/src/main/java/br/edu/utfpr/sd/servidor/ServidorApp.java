@@ -37,6 +37,7 @@ import javafx.scene.control.Alert;
 import javafx.scene.control.Button;
 import javafx.scene.control.ButtonBar;
 import javafx.scene.control.ButtonType;
+import javafx.scene.control.ComboBox;
 import javafx.scene.control.Label;
 import javafx.scene.control.SplitPane;
 import javafx.scene.control.Tab;
@@ -56,7 +57,7 @@ import javafx.stage.Stage;
 /**
  * Interface grafica do servidor: pede a porta, inicia o servidor e monitora as threads.
  * A aba principal mostra as threads ativas, a conversa de cada uma e a comunicacao de todas;
- * a aba "Banco de dados" mostra a tabela de usuarios do SQLite e as duas listas de tokens ativos.
+ * a aba "Banco de dados" mostra as tabelas do SQLite (usuarios, salas, reservas...) e as duas listas de tokens ativos.
  */
 public class ServidorApp extends Application {
 
@@ -100,7 +101,9 @@ public class ServidorApp extends Application {
     private final Button botaoParar = new Button("Parar");
     private final Label indicador = new Label("Parado");
 
+    // Tabela do banco exibida na aba "Banco de dados" (escolhida no seletor)
     private final TableView<List<String>> tabelaUsuarios = new TableView<>();
+    private final ComboBox<String> seletorTabela = new ComboBox<>(FXCollections.observableArrayList(BancoDados.TABELAS));
     private final Label resumoBanco = new Label("Ainda nao lido.");
     // Colunas da ultima leitura, para achar o "id" da linha selecionada
     private List<String> colunasBanco = List.of();
@@ -295,23 +298,27 @@ public class ServidorApp extends Application {
 
     /** Aba que mostra a tabela usuarios do SQLite como ela esta gravada, relida pelo botao Atualizar. */
     private VBox abaBanco() {
-        Label titulo = new Label("Tabela usuarios (" + ARQUIVO_BANCO + ")");
+        Label titulo = new Label("Tabela (" + ARQUIVO_BANCO + "):");
         titulo.getStyleClass().add("titulo-secao");
+        seletorTabela.getSelectionModel().select("usuarios");
+        seletorTabela.setOnAction(e -> atualizarBanco());
         resumoBanco.getStyleClass().add("contador");
         Button atualizar = new Button("Atualizar");
         atualizar.getStyleClass().add("botao-principal");
         atualizar.setOnAction(e -> atualizarBanco());
-        Button deletar = new Button("Deletar");
+        // Deletar so vale para a tabela usuarios (apaga o usuario e encerra a sessao dele)
+        Button deletar = new Button("Deletar usuario");
         deletar.getStyleClass().add("botao-perigo");
-        deletar.disableProperty().bind(tabelaUsuarios.getSelectionModel().selectedItemProperty().isNull());
+        deletar.disableProperty().bind(tabelaUsuarios.getSelectionModel().selectedItemProperty().isNull()
+                .or(seletorTabela.valueProperty().isNotEqualTo("usuarios")));
         deletar.setOnAction(e -> deletarUsuario());
 
         Region espaco = new Region();
         HBox.setHgrow(espaco, Priority.ALWAYS);
-        HBox cabecalho = new HBox(8, titulo, espaco, resumoBanco, deletar, atualizar);
+        HBox cabecalho = new HBox(8, titulo, seletorTabela, espaco, resumoBanco, deletar, atualizar);
         cabecalho.setAlignment(Pos.CENTER_LEFT);
 
-        tabelaUsuarios.setPlaceholder(new Label("Nenhum usuario cadastrado."));
+        tabelaUsuarios.setPlaceholder(new Label("Tabela vazia."));
         // Sem ajuste automatico: cada coluna tem a largura do seu conteudo e a tabela rola na horizontal
         tabelaUsuarios.setColumnResizePolicy(TableView.UNCONSTRAINED_RESIZE_POLICY);
         VBox.setVgrow(tabelaUsuarios, Priority.ALWAYS);
@@ -355,7 +362,7 @@ public class ServidorApp extends Application {
         return painel;
     }
 
-    /** Le a tabela usuarios no banco e substitui as colunas e linhas exibidas pelo resultado da leitura. */
+    /** Le a tabela escolhida no banco e substitui as colunas e linhas exibidas pelo resultado da leitura. */
     private void atualizarBanco() {
         if (!abrirBanco()) {
             return;
@@ -364,7 +371,7 @@ public class ServidorApp extends Application {
         List<BancoDados.Sessao> admins;
         List<BancoDados.Sessao> usuarios;
         try {
-            tabela = banco.lerTabelaUsuarios();
+            tabela = banco.lerTabela(seletorTabela.getValue());
             admins = banco.sessoesAdmins();
             usuarios = banco.sessoesUsuarios();
         } catch (SQLException e) {

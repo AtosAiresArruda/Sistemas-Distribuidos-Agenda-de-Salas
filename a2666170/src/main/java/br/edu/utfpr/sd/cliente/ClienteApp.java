@@ -1,9 +1,13 @@
 package br.edu.utfpr.sd.cliente;
 
 import br.edu.utfpr.sd.comum.ConexaoJson;
+import br.edu.utfpr.sd.comum.Horarios;
+import br.edu.utfpr.sd.comum.Horarios.Horario;
 import br.edu.utfpr.sd.comum.Json;
 import br.edu.utfpr.sd.comum.ValidacaoCadastro;
+import br.edu.utfpr.sd.comum.ValidacaoSala;
 import br.edu.utfpr.sd.gui.PainelJson;
+import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParseException;
@@ -17,6 +21,7 @@ import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.function.Consumer;
+import java.util.function.Function;
 import javafx.application.Application;
 import javafx.application.Platform;
 import javafx.beans.property.BooleanProperty;
@@ -30,6 +35,7 @@ import javafx.scene.Scene;
 import javafx.scene.control.Alert;
 import javafx.scene.control.Button;
 import javafx.scene.control.ButtonType;
+import javafx.scene.control.CheckBox;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.Label;
 import javafx.scene.control.PasswordField;
@@ -130,6 +136,40 @@ public class ClienteApp extends Application {
             new ComboBox<>(FXCollections.observableArrayList(NAO_ALTERAR, "user", "admin"));
     private final Label retornoAdmin = retorno();
 
+    // Aba Salas (so existe no TabPane quando a sessao e de admin)
+    private Tab abaSalas;
+    private final TableView<JsonObject> tabelaSalas = new TableView<>();
+    private final Label contagemSalas = new Label("Ainda nao listado.");
+    private final TextField filtroData = new TextField();
+    private final TextField filtroInicio = new TextField();
+    private final TextField filtroFim = new TextField();
+    private final TextField filtroCapacidade = new TextField();
+    private final TextField salaAlvo = new TextField();
+    private final Label salaLidaId = valorLido();
+    private final Label salaLidaNome = valorLido();
+    private final Label salaLidaCapacidade = valorLido();
+    private final Label salaLidaLocal = valorLido();
+    private final Label salaLidaRecursos = valorLido();
+    private final Label salaLidaStatus = valorLido();
+    private final Label salaLidaHorarios = valorLido();
+    private final TextField novaSalaNome = new TextField();
+    private final TextField novaSalaCapacidade = new TextField();
+    private final TextField novaSalaLocal = new TextField();
+    private final TextField novaSalaRecursos = new TextField();
+    private final GradeHorarios novaSalaHorarios = new GradeHorarios();
+    private final TextField editSalaNome = new TextField();
+    private final TextField editSalaCapacidade = new TextField();
+    private final TextField editSalaLocal = new TextField();
+    private final TextField editSalaRecursos = new TextField();
+    private final ComboBox<String> editSalaStatus =
+            new ComboBox<>(FXCollections.observableArrayList(NAO_ALTERAR, "active", "inactive"));
+    private final CheckBox editSalaEnviarHorarios = new CheckBox("Substituir os horarios (envia schedule)");
+    private final GradeHorarios editSalaHorarios = new GradeHorarios();
+    private final TextField agendaData = new TextField();
+    private final TableView<JsonObject> tabelaReservas = new TableView<>();
+    private final Label contagemReservas = new Label("Ainda nao listado.");
+    private final Label retornoSalas = retorno();
+
     private final TextField campoJsonManual = new TextField();
 
     @Override
@@ -137,6 +177,7 @@ public class ClienteApp extends Application {
         abaLogin = new Tab("Login", rolavel(conteudoLogin()));
         abaConta = new Tab("Minha conta", rolavel(conteudoConta()));
         abaAdmin = new Tab("Administracao", rolavel(conteudoAdmin()));
+        abaSalas = new Tab("Salas", rolavel(conteudoSalas()));
         abas.getTabs().addAll(abaLogin, abaConta);
         abas.setTabClosingPolicy(TabPane.TabClosingPolicy.UNAVAILABLE);
         abaConta.disableProperty().bind(logado.not());
@@ -321,6 +362,120 @@ public class ClienteApp extends Application {
                 "Envia admin_delete_user: apaga o cadastro do alvo e encerra a sessao dele.", excluir);
 
         VBox conteudo = new VBox(12, retornoAdmin, cartaoLista, cartaoAlvo, cartaoLeitura, cartaoUpdate, cartaoDelete);
+        conteudo.setPadding(new Insets(12));
+        return conteudo;
+    }
+
+    private VBox conteudoSalas() {
+        // Listagem (list_rooms) com os filtros opcionais do protocolo
+        tabelaSalas.setPlaceholder(new Label("Clique em Listar para pedir as salas ao servidor."));
+        tabelaSalas.getColumns().add(colunaJson("room_id", 60));
+        tabelaSalas.getColumns().add(colunaJson("name", 130));
+        tabelaSalas.getColumns().add(colunaJson("capacity", 70));
+        tabelaSalas.getColumns().add(colunaJson("location", 130));
+        tabelaSalas.getColumns().add(coluna("resources", 120, s -> String.join(", ", recursos(s))));
+        tabelaSalas.getColumns().add(coluna("room_status", 130, s -> statusLegivel(texto(s, "room_status"))));
+        tabelaSalas.getColumns().add(colunaJson("available", 70));
+        tabelaSalas.getColumns().add(coluna("schedule", 260, s -> Horarios.resumo(GradeHorarios.lerSchedule(s))));
+        tabelaSalas.setPrefHeight(220);
+        tabelaSalas.getSelectionModel().selectedItemProperty().addListener((obs, antes, sala) -> {
+            if (sala != null) {
+                salaAlvo.setText(texto(sala, "room_id"));
+            }
+        });
+        filtroData.setPromptText("AAAA-MM-DD");
+        filtroInicio.setPromptText("HH:MM");
+        filtroFim.setPromptText("HH:MM");
+        filtroCapacidade.setPromptText("ex.: 6");
+        GridPane filtros = formulario(
+                "Data", filtroData,
+                "Inicio", filtroInicio,
+                "Fim", filtroFim,
+                "Cap. minima", filtroCapacidade);
+        Label dicaFiltros = new Label("Filtros opcionais (em branco = nao enviados). Data, inicio e fim vao juntos; "
+                + "com eles cada sala vem com \"available\".");
+        dicaFiltros.getStyleClass().add("dica");
+        dicaFiltros.setWrapText(true);
+        contagemSalas.getStyleClass().add("contador");
+        VBox cartaoLista = cartao("Salas cadastradas",
+                "Envia list_rooms. Clique numa linha para escolher a sala alvo.",
+                filtros, dicaFiltros, botao("Listar salas (list_rooms)", this::listRooms), contagemSalas, tabelaSalas);
+
+        salaAlvo.setPromptText("room_id, ex.: 1");
+        VBox cartaoAlvo = cartao("Sala alvo", "Enviada como room_id nas operacoes de ler, atualizar, excluir e agenda.",
+                formulario("room_id", salaAlvo));
+
+        GridPane dados = new GridPane();
+        dados.setHgap(12);
+        dados.setVgap(6);
+        String[] rotulos = {"room_id", "Nome", "Capacidade", "Localizacao", "Recursos", "Status", "Horarios"};
+        Label[] valores = {salaLidaId, salaLidaNome, salaLidaCapacidade, salaLidaLocal, salaLidaRecursos,
+                salaLidaStatus, salaLidaHorarios};
+        for (int i = 0; i < rotulos.length; i++) {
+            valores[i].setWrapText(true);
+            dados.addRow(i, new Label(rotulos[i] + ":"), valores[i]);
+        }
+        VBox cartaoLeitura = cartao("Ler sala",
+                "Envia read_room. Os dados lidos tambem preenchem o formulario de atualizacao.",
+                botao("Ler sala alvo (read_room)", this::readRoom), dados);
+
+        novaSalaNome.setPromptText("Sala de Estudo B12");
+        novaSalaCapacidade.setPromptText("12");
+        novaSalaLocal.setPromptText("Bloco B - 1 andar");
+        novaSalaRecursos.setPromptText("projetor, tv  (separados por virgula; pode ficar vazio)");
+        GridPane formCriar = formulario(
+                "Nome", novaSalaNome,
+                "Capacidade", novaSalaCapacidade,
+                "Localizacao", novaSalaLocal,
+                "Recursos", novaSalaRecursos);
+        Label dicaCriar = new Label("Dias e horarios em que a sala funciona (campo schedule). A sala nasce \"active\" (livre).");
+        dicaCriar.getStyleClass().add("dica");
+        dicaCriar.setWrapText(true);
+        VBox cartaoCriar = cartao("Cadastrar sala", "Envia create_room. O servidor gera o room_id.",
+                formCriar, dicaCriar, novaSalaHorarios, botao("Cadastrar sala (create_room)", this::createRoom));
+
+        editSalaNome.setPromptText("em branco = nao alterar");
+        editSalaCapacidade.setPromptText("em branco = nao alterar");
+        editSalaLocal.setPromptText("em branco = nao alterar");
+        editSalaRecursos.setPromptText("lista completa, separada por virgula");
+        editSalaStatus.getSelectionModel().select(NAO_ALTERAR);
+        editSalaStatus.setMaxWidth(Double.MAX_VALUE);
+        GridPane formAtualizar = formulario(
+                "Nome", editSalaNome,
+                "Capacidade", editSalaCapacidade,
+                "Localizacao", editSalaLocal,
+                "Recursos", editSalaRecursos,
+                "Status", editSalaStatus);
+        Label dicaAtualizar = new Label("Campos em branco e \"" + NAO_ALTERAR + "\" vao como \"\" e nao sao alterados. "
+                + "Status: active = livre, inactive = indisponivel. Recursos sempre substituem a lista inteira. "
+                + "Use \"Ler sala\" antes para trazer os valores atuais.");
+        dicaAtualizar.getStyleClass().add("dica");
+        dicaAtualizar.setWrapText(true);
+        editSalaHorarios.disableProperty().bind(editSalaEnviarHorarios.selectedProperty().not());
+        VBox cartaoAtualizar = cartao("Atualizar sala", "Envia update_room para a sala alvo.",
+                formAtualizar, dicaAtualizar, editSalaEnviarHorarios, editSalaHorarios,
+                botao("Atualizar sala alvo (update_room)", this::updateRoom));
+
+        Button excluir = botao("Excluir sala alvo (delete_room)", this::deleteRoom);
+        excluir.getStyleClass().add("botao-perigo");
+        VBox cartaoExcluir = cartao("Excluir sala",
+                "Envia delete_room. Sala com reservas que ainda nao terminaram nao pode ser removida.", excluir);
+
+        tabelaReservas.setPlaceholder(new Label("Nenhuma reserva listada."));
+        for (String campo : new String[] {"reservation_id", "name", "user", "date", "start_time", "end_time", "topic",
+                "participants"}) {
+            tabelaReservas.getColumns().add(colunaJson(campo, 90));
+        }
+        tabelaReservas.setPrefHeight(180);
+        agendaData.setPromptText("AAAA-MM-DD (opcional)");
+        contagemReservas.getStyleClass().add("contador");
+        VBox cartaoAgenda = cartao("Agenda (quem reservou)",
+                "Envia list_reservations com scope \"all\" e a sala alvo (em branco = todas as salas).",
+                formulario("Data", agendaData), botao("Listar reservas (list_reservations)", this::listReservations),
+                contagemReservas, tabelaReservas);
+
+        VBox conteudo = new VBox(12, retornoSalas, cartaoLista, cartaoAlvo, cartaoLeitura, cartaoCriar,
+                cartaoAtualizar, cartaoExcluir, cartaoAgenda);
         conteudo.setPadding(new Insets(12));
         return conteudo;
     }
@@ -568,6 +723,240 @@ public class ClienteApp extends Application {
         });
     }
 
+    private void listRooms() {
+        String date = filtroData.getText().trim();
+        String inicio = filtroInicio.getText().trim();
+        String fim = filtroFim.getText().trim();
+        String minCapacity = filtroCapacidade.getText().trim();
+        int trio = (date.isEmpty() ? 0 : 1) + (inicio.isEmpty() ? 0 : 1) + (fim.isEmpty() ? 0 : 1);
+        if (!dadosValidos(retornoSalas,
+                trio == 1 || trio == 2 ? "Informe data, inicio e fim juntos, ou deixe os tres em branco." : null,
+                date.isEmpty() ? null : ValidacaoSala.date(date),
+                inicio.isEmpty() ? null : ValidacaoSala.time("Inicio", inicio),
+                fim.isEmpty() ? null : ValidacaoSala.time("Fim", fim),
+                minCapacity.isEmpty() ? null : ValidacaoSala.minCapacity(minCapacity))) {
+            return;
+        }
+
+        JsonObject req = requisicaoComToken("list_rooms");
+        adicionarSePreenchido(req, "date", date);
+        adicionarSePreenchido(req, "start_time", inicio);
+        adicionarSePreenchido(req, "end_time", fim);
+        adicionarSePreenchido(req, "min_capacity", minCapacity);
+        enviar(req, retornoSalas, resp -> {
+            if (sucesso(resp)) {
+                tabelaSalas.setItems(FXCollections.observableArrayList(objetos(resp, "rooms")));
+                contagemSalas.setText("count: " + texto(resp, "count") + " sala(s)");
+            }
+        });
+    }
+
+    private void readRoom() {
+        String roomId = salaAlvoValida();
+        if (roomId == null) {
+            return;
+        }
+        JsonObject req = requisicaoComToken("read_room");
+        req.addProperty("room_id", roomId);
+        enviar(req, retornoSalas, resp -> {
+            limparLeituraSala();
+            if (sucesso(resp)) {
+                List<Horario> horarios = GradeHorarios.lerSchedule(resp);
+                salaLidaId.setText(texto(resp, "room_id"));
+                salaLidaNome.setText(texto(resp, "name"));
+                salaLidaCapacidade.setText(texto(resp, "capacity"));
+                salaLidaLocal.setText(texto(resp, "location"));
+                salaLidaRecursos.setText(String.join(", ", recursos(resp)));
+                salaLidaStatus.setText(statusLegivel(texto(resp, "room_status")));
+                // Servidores que nao usam a extensao "schedule" nao mandam o campo
+                salaLidaHorarios.setText(resp.has("schedule") ? Horarios.resumo(horarios) : "nao informado pelo servidor");
+                // Prepara a atualizacao com os valores atuais
+                editSalaNome.setText(texto(resp, "name"));
+                editSalaCapacidade.setText(texto(resp, "capacity"));
+                editSalaLocal.setText(texto(resp, "location"));
+                editSalaRecursos.setText(String.join(", ", recursos(resp)));
+                editSalaStatus.getSelectionModel().select(NAO_ALTERAR);
+                editSalaHorarios.marcar(horarios);
+                editSalaEnviarHorarios.setSelected(resp.has("schedule"));
+            }
+            recarregarSalasSeNaoEncontrada(resp);
+        });
+    }
+
+    private void createRoom() {
+        String name = novaSalaNome.getText();
+        String capacity = novaSalaCapacidade.getText().trim();
+        String location = novaSalaLocal.getText();
+        if (!dadosValidos(retornoSalas, ValidacaoSala.name(name), ValidacaoSala.capacity(capacity),
+                ValidacaoSala.location(location))) {
+            return;
+        }
+
+        JsonObject req = requisicaoComToken("create_room");
+        req.addProperty("name", name);
+        req.addProperty("capacity", capacity);
+        req.addProperty("location", location);
+        req.add("resources", listaRecursos(novaSalaRecursos.getText()));
+        req.add("schedule", novaSalaHorarios.comoJson());
+        enviar(req, retornoSalas, resp -> {
+            if (sucesso(resp)) {
+                // Aba "Codigos de Status": no 201 o cliente guarda o id devolvido
+                salaAlvo.setText(texto(resp, "room_id"));
+                novaSalaNome.clear();
+                novaSalaCapacidade.clear();
+                novaSalaLocal.clear();
+                novaSalaRecursos.clear();
+                novaSalaHorarios.limpar();
+                listRooms();
+            }
+        });
+    }
+
+    private void updateRoom() {
+        String roomId = salaAlvoValida();
+        if (roomId == null) {
+            return;
+        }
+        String name = editSalaNome.getText();
+        String capacity = editSalaCapacidade.getText().trim();
+        String location = editSalaLocal.getText();
+        String status = editSalaStatus.getValue();
+        String roomStatus = status == null || NAO_ALTERAR.equals(status) ? "" : status;
+        // Campo vazio significa "nao alterar", entao so os preenchidos sao conferidos
+        if (!dadosValidos(retornoSalas, name.isEmpty() ? null : ValidacaoSala.name(name),
+                capacity.isEmpty() ? null : ValidacaoSala.capacity(capacity),
+                location.isEmpty() ? null : ValidacaoSala.location(location))) {
+            return;
+        }
+
+        JsonObject req = requisicaoComToken("update_room");
+        req.addProperty("room_id", roomId);
+        req.addProperty("name", name);
+        req.addProperty("capacity", capacity);
+        req.addProperty("location", location);
+        req.add("resources", listaRecursos(editSalaRecursos.getText()));
+        req.addProperty("room_status", roomStatus);
+        // Sem a caixa marcada a chave nao e enviada e o servidor mantem os horarios
+        if (editSalaEnviarHorarios.isSelected()) {
+            req.add("schedule", editSalaHorarios.comoJson());
+        }
+        enviar(req, retornoSalas, resp -> {
+            if (sucesso(resp)) {
+                limparLeituraSala();
+                listRooms();
+            }
+            recarregarSalasSeNaoEncontrada(resp);
+        });
+    }
+
+    private void deleteRoom() {
+        String roomId = salaAlvoValida();
+        if (roomId == null) {
+            return;
+        }
+        Alert confirmacao = new Alert(Alert.AlertType.CONFIRMATION,
+                "A sala " + roomId + " sera removida dos registros do servidor.", ButtonType.OK, ButtonType.CANCEL);
+        confirmacao.setHeaderText("Excluir a sala " + roomId + "?");
+        if (confirmacao.showAndWait().orElse(ButtonType.CANCEL) != ButtonType.OK) {
+            return;
+        }
+        JsonObject req = requisicaoComToken("delete_room");
+        req.addProperty("room_id", roomId);
+        enviar(req, retornoSalas, resp -> {
+            if (sucesso(resp)) {
+                salaAlvo.clear();
+                limparLeituraSala();
+                listRooms();
+            }
+            recarregarSalasSeNaoEncontrada(resp);
+        });
+    }
+
+    private void listReservations() {
+        String roomId = salaAlvo.getText().trim();
+        String date = agendaData.getText().trim();
+        if (!dadosValidos(retornoSalas, roomId.isEmpty() ? null : ValidacaoSala.roomId(roomId),
+                date.isEmpty() ? null : ValidacaoSala.date(date))) {
+            return;
+        }
+
+        JsonObject req = requisicaoComToken("list_reservations");
+        req.addProperty("scope", "all");
+        adicionarSePreenchido(req, "date", date);
+        adicionarSePreenchido(req, "room_id", roomId);
+        enviar(req, retornoSalas, resp -> {
+            if (sucesso(resp)) {
+                tabelaReservas.setItems(FXCollections.observableArrayList(objetos(resp, "reservations")));
+                contagemReservas.setText("count: " + texto(resp, "count") + " reserva(s)"
+                        + (roomId.isEmpty() ? " em todas as salas" : " na sala " + roomId));
+            }
+        });
+    }
+
+    private void recarregarSalasSeNaoEncontrada(JsonObject resp) {
+        if ("404".equals(texto(resp, "status")) && ehAdmin()) {
+            listRooms();
+        }
+    }
+
+    private String salaAlvoValida() {
+        String roomId = salaAlvo.getText().trim();
+        return dadosValidos(retornoSalas, ValidacaoSala.roomId(roomId)) ? roomId : null;
+    }
+
+    /** Recursos digitados separados por virgula, sem itens vazios; texto vazio vira []. */
+    private static JsonArray listaRecursos(String texto) {
+        JsonArray lista = new JsonArray();
+        for (String item : texto.split(",")) {
+            if (!item.isBlank()) {
+                lista.add(item.trim());
+            }
+        }
+        return lista;
+    }
+
+    private static List<String> recursos(JsonObject sala) {
+        List<String> recursos = new ArrayList<>();
+        JsonElement lista = sala.get("resources");
+        if (lista != null && lista.isJsonArray()) {
+            for (JsonElement item : lista.getAsJsonArray()) {
+                if (item.isJsonPrimitive()) {
+                    recursos.add(item.getAsString());
+                }
+            }
+        }
+        return recursos;
+    }
+
+    /** Itens objeto de um array da resposta (ex.: "rooms", "reservations"). */
+    private static List<JsonObject> objetos(JsonObject resp, String chave) {
+        List<JsonObject> itens = new ArrayList<>();
+        JsonElement lista = resp.get(chave);
+        if (lista != null && lista.isJsonArray()) {
+            for (JsonElement item : lista.getAsJsonArray()) {
+                if (item.isJsonObject()) {
+                    itens.add(item.getAsJsonObject());
+                }
+            }
+        }
+        return itens;
+    }
+
+    /** room_status com o significado pedido na EP-2: active = livre, inactive = indisponivel. */
+    private static String statusLegivel(String roomStatus) {
+        return switch (roomStatus) {
+            case "active" -> "active (livre)";
+            case "inactive" -> "inactive (indisponivel)";
+            default -> roomStatus;
+        };
+    }
+
+    private static void adicionarSePreenchido(JsonObject req, String chave, String valor) {
+        if (!valor.isEmpty()) {
+            req.addProperty(chave, valor);
+        }
+    }
+
     /** Aba "Codigos de Status": no 404 o cliente informa e recarrega a listagem. */
     private void recarregarSeNaoEncontrado(JsonObject resp) {
         if ("404".equals(texto(resp, "status")) && ehAdmin()) {
@@ -807,10 +1196,12 @@ public class ClienteApp extends Application {
     private void atualizarSessao() {
         logado.set(token != null);
         if (ehAdmin()) {
-            if (!abas.getTabs().contains(abaAdmin)) {
-                abas.getTabs().add(abaAdmin);
+            for (Tab aba : new Tab[] {abaAdmin, abaSalas}) {
+                if (!abas.getTabs().contains(aba)) {
+                    abas.getTabs().add(aba);
+                }
             }
-        } else if (abas.getTabs().remove(abaAdmin)) {
+        } else if (abas.getTabs().removeAll(abaAdmin, abaSalas)) {
             limparDadosAdmin();
         }
         indicadorSessao.getStyleClass().remove("ativo");
@@ -843,8 +1234,32 @@ public class ClienteApp extends Application {
         adminNovaSenha.clear();
         adminNovoPerfil.getSelectionModel().select(NAO_ALTERAR);
         limparLeituraAdmin();
-        retornoAdmin.setVisible(false);
-        retornoAdmin.setManaged(false);
+        // Aba Salas
+        tabelaSalas.getItems().clear();
+        contagemSalas.setText("Ainda nao listado.");
+        tabelaReservas.getItems().clear();
+        contagemReservas.setText("Ainda nao listado.");
+        for (TextField campo : new TextField[] {filtroData, filtroInicio, filtroFim, filtroCapacidade, salaAlvo,
+                novaSalaNome, novaSalaCapacidade, novaSalaLocal, novaSalaRecursos, editSalaNome, editSalaCapacidade,
+                editSalaLocal, editSalaRecursos, agendaData}) {
+            campo.clear();
+        }
+        novaSalaHorarios.limpar();
+        editSalaHorarios.limpar();
+        editSalaEnviarHorarios.setSelected(false);
+        editSalaStatus.getSelectionModel().select(NAO_ALTERAR);
+        limparLeituraSala();
+        for (Label retorno : new Label[] {retornoAdmin, retornoSalas}) {
+            retorno.setVisible(false);
+            retorno.setManaged(false);
+        }
+    }
+
+    private void limparLeituraSala() {
+        for (Label l : new Label[] {salaLidaId, salaLidaNome, salaLidaCapacidade, salaLidaLocal, salaLidaRecursos,
+                salaLidaStatus, salaLidaHorarios}) {
+            l.setText("-");
+        }
     }
 
     private String enderecoInformado() {
@@ -855,6 +1270,9 @@ public class ClienteApp extends Application {
         Tab atual = abas.getSelectionModel().getSelectedItem();
         if (atual == abaConta) {
             return retornoConta;
+        }
+        if (atual == abaSalas) {
+            return retornoSalas;
         }
         return atual == abaAdmin ? retornoAdmin : retornoLogin;
     }
@@ -950,9 +1368,15 @@ public class ClienteApp extends Application {
 
     /** Coluna que mostra um campo de cada objeto JSON da lista (ex.: "user" de admin_list_users). */
     private static TableColumn<JsonObject, String> colunaJson(String chave, double largura) {
-        TableColumn<JsonObject, String> coluna = new TableColumn<>(chave);
+        return coluna(chave, largura, o -> texto(o, chave));
+    }
+
+    /** Coluna com um valor calculado a partir de cada objeto JSON da lista. */
+    private static TableColumn<JsonObject, String> coluna(String titulo, double largura,
+                                                          Function<JsonObject, String> valor) {
+        TableColumn<JsonObject, String> coluna = new TableColumn<>(titulo);
         coluna.setPrefWidth(largura);
-        coluna.setCellValueFactory(c -> new SimpleStringProperty(texto(c.getValue(), chave)));
+        coluna.setCellValueFactory(c -> new SimpleStringProperty(valor.apply(c.getValue())));
         return coluna;
     }
 

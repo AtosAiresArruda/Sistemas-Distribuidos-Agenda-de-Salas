@@ -1,7 +1,10 @@
 package br.edu.utfpr.sd.servidor;
 
 import br.edu.utfpr.sd.comum.ConexaoJson;
+import br.edu.utfpr.sd.comum.Horarios;
+import br.edu.utfpr.sd.comum.Horarios.Horario;
 import br.edu.utfpr.sd.comum.Json;
+import br.edu.utfpr.sd.servidor.BancoDados.Sala;
 import br.edu.utfpr.sd.servidor.BancoDados.Usuario;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
@@ -10,7 +13,9 @@ import com.google.gson.JsonParseException;
 import java.io.IOException;
 import java.net.Socket;
 import java.net.SocketTimeoutException;
+import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -29,8 +34,21 @@ public class TratadorCliente extends Thread {
     private static final Pattern EMAIL = Pattern.compile("^[a-z0-9._-]+@[a-z0-9-]+(\\.[a-z0-9-]+)*\\.[a-z]{2,}$");
     private static final Pattern TOKEN = Pattern.compile("^[a-f0-9]{64}$");
 
-    // Dicionario: role so aceita "user" e "admin" (case-sensitive)
+    private static final Pattern ROOM_ID = Pattern.compile("^[0-9]{1,10}$");
+    private static final Pattern NAME = Pattern.compile("^[A-Za-z0-9 -]{1,30}$");
+    private static final Pattern CAPACITY = Pattern.compile("^[1-9][0-9]{0,3}$");
+    private static final Pattern LOCATION = Pattern.compile("^[A-Za-z0-9 ,.-]{1,60}$");
+    private static final Pattern DATE = Pattern.compile("^[0-9]{4}-[0-9]{2}-[0-9]{2}$");
+    private static final Pattern TIME = Pattern.compile("^([01][0-9]|2[0-3]):[0-5][0-9]$");
+
+    // Dicionario: valores fixos (case-sensitive)
     private static final Set<String> ROLES = Set.of("user", "admin");
+    private static final Set<String> ROOM_STATUS = Set.of("active", "inactive");
+    private static final Set<String> SCOPES = Set.of("mine", "all");
+
+    private static final String DADOS_SALA = "Dados da sala em formato invalido";
+    private static final String SALA_NAO_ENCONTRADA = "Sala nao encontrada";
+    private static final String RESERVAS_ATIVAS = "Sala possui reservas ativas";
 
     private static final String TOKEN_INVALIDO = "Token invalido ou expirado";
     private static final String USUARIO_NAO_ENCONTRADO = "Usuario nao encontrado";
@@ -162,6 +180,12 @@ public class TratadorCliente extends Thread {
                 case "admin_read_user" -> adminReadUser(requisicao);
                 case "admin_update_user" -> adminUpdateUser(requisicao);
                 case "admin_delete_user" -> adminDeleteUser(requisicao);
+                case "create_room" -> createRoom(requisicao);
+                case "list_rooms" -> listRooms(requisicao);
+                case "read_room" -> readRoom(requisicao);
+                case "update_room" -> updateRoom(requisicao);
+                case "delete_room" -> deleteRoom(requisicao);
+                case "list_reservations" -> listReservations(requisicao);
                 default -> Json.resposta("error", "400", "Operacao desconhecida");
             };
         } catch (Falha f) {
@@ -373,6 +397,228 @@ public class TratadorCliente extends Thread {
         return Json.resposta("admin_delete_user_response", "200", "Usuario removido com sucesso");
     }
 
+    private JsonObject createRoom(JsonObject req) throws Exception {
+        String formatoInvalido = DADOS_SALA;
+        String token = token(req, formatoInvalido);
+        String name = texto(req, "name", formatoInvalido);
+        String capacity = texto(req, "capacity", formatoInvalido);
+        String location = texto(req, "location", formatoInvalido);
+        List<String> resources = recursos(req, formatoInvalido);
+        // schedule (extensao do projeto) e opcional: sem ele a sala nasce sem horarios
+        List<Horario> schedule = req.has("schedule") ? horarios(req, formatoInvalido) : List.of();
+        // Em criacao, "" e invalido (protocolo 2.11): as regex ja exigem pelo menos 1 caractere
+        if (!confere(NAME, name) || !confere(CAPACITY, capacity) || !confere(LOCATION, location)) {
+            throw new Falha("400", formatoInvalido);
+        }
+
+        sessaoAdmin(token);
+        Long roomId = banco.criarSala(name, Integer.parseInt(capacity), location, resources, schedule);
+        if (roomId == null) {
+            throw new Falha("409", "Sala ja cadastrada");
+        }
+        JsonObject resposta = Json.resposta("create_room_response", "201", "Sala cadastrada com sucesso");
+        resposta.addProperty("room_id", String.valueOf(roomId));
+        return resposta;
+    }
+
+    private JsonObject listRooms(JsonObject req) throws Exception {
+        String formatoInvalido = "Filtros em formato invalido";
+        String token = token(req, formatoInvalido);
+        String date = opcional(req, "date", formatoInvalido);
+        String startTime = opcional(req, "start_time", formatoInvalido);
+        String endTime = opcional(req, "end_time", formatoInvalido);
+        String minCapacity = opcional(req, "min_capacity", formatoInvalido);
+        // date, start_time e end_time vem juntos ou nenhum deles
+        int trio = (date == null ? 0 : 1) + (startTime == null ? 0 : 1) + (endTime == null ? 0 : 1);
+        if ((trio != 0 && trio != 3)
+                || (date != null && !confere(DATE, date))
+                || (startTime != null && !confere(TIME, startTime))
+                || (endTime != null && !confere(TIME, endTime))
+                || (minCapacity != null && !confere(CAPACITY, minCapacity))) {
+            throw new Falha("400", formatoInvalido);
+        }
+
+        sessao(token);
+        JsonArray lista = new JsonArray();
+        for (Sala sala : banco.listarSalas(minCapacity == null ? null : Integer.parseInt(minCapacity))) {
+            // available so aparece quando o trio de horario e enviado
+            String available = trio == 3 ? String.valueOf(banco.disponivel(sala, date, startTime, endTime)) : null;
+            lista.add(salaJson(new JsonObject(), sala, available));
+        }
+        JsonObject resposta = Json.resposta("list_rooms_response", "200", "Consulta realizada com sucesso");
+        resposta.addProperty("count", String.valueOf(lista.size()));
+        resposta.add("rooms", lista);
+        return resposta;
+    }
+
+    private JsonObject readRoom(JsonObject req) throws Exception {
+        String formatoInvalido = "Dados em formato invalido";
+        String token = token(req, formatoInvalido);
+        String roomId = texto(req, "room_id", formatoInvalido);
+        if (!confere(ROOM_ID, roomId)) {
+            throw new Falha("400", formatoInvalido);
+        }
+
+        sessao(token);
+        Sala sala = banco.buscarSala(Long.parseLong(roomId));
+        if (sala == null) {
+            throw new Falha("404", SALA_NAO_ENCONTRADA);
+        }
+        return salaJson(Json.resposta("read_room_response", "200", "Consulta realizada com sucesso"), sala, null);
+    }
+
+    private JsonObject updateRoom(JsonObject req) throws Exception {
+        String formatoInvalido = DADOS_SALA;
+        String token = token(req, formatoInvalido);
+        String roomId = texto(req, "room_id", formatoInvalido);
+        String name = texto(req, "name", formatoInvalido);
+        String capacity = texto(req, "capacity", formatoInvalido);
+        String location = texto(req, "location", formatoInvalido);
+        String roomStatus = texto(req, "room_status", formatoInvalido);
+        // resources e sempre a lista completa; schedule ausente mantem os horarios
+        List<String> resources = recursos(req, formatoInvalido);
+        List<Horario> schedule = req.has("schedule") ? horarios(req, formatoInvalido) : null;
+        // String vazia significa "nao alterar"
+        if (!confere(ROOM_ID, roomId)
+                || (!name.isEmpty() && !confere(NAME, name))
+                || (!capacity.isEmpty() && !confere(CAPACITY, capacity))
+                || (!location.isEmpty() && !confere(LOCATION, location))
+                || (!roomStatus.isEmpty() && !ROOM_STATUS.contains(roomStatus))) {
+            throw new Falha("400", formatoInvalido);
+        }
+
+        sessaoAdmin(token);
+        BancoDados.AlteracaoSala alteracao = new BancoDados.AlteracaoSala(vazioComoNulo(name),
+                capacity.isEmpty() ? null : Integer.parseInt(capacity), vazioComoNulo(location), resources,
+                vazioComoNulo(roomStatus), schedule);
+        switch (banco.atualizarSala(Long.parseLong(roomId), alteracao)) {
+            case NAO_ENCONTRADO -> throw new Falha("404", SALA_NAO_ENCONTRADA);
+            case NOME_EM_USO -> throw new Falha("409", "Sala ja cadastrada");
+            // Pendencia 3 do protocolo: sem message definida; decidido usar a do catalogo de 409
+            case RESERVAS_ATIVAS -> throw new Falha("409", RESERVAS_ATIVAS);
+            default -> {
+            }
+        }
+        return Json.resposta("update_room_response", "200", "Sala atualizada com sucesso");
+    }
+
+    private JsonObject deleteRoom(JsonObject req) throws Exception {
+        String formatoInvalido = "Dados em formato invalido";
+        String token = token(req, formatoInvalido);
+        String roomId = texto(req, "room_id", formatoInvalido);
+        if (!confere(ROOM_ID, roomId)) {
+            throw new Falha("400", formatoInvalido);
+        }
+
+        sessaoAdmin(token);
+        switch (banco.removerSala(Long.parseLong(roomId))) {
+            case NAO_ENCONTRADO -> throw new Falha("404", SALA_NAO_ENCONTRADA);
+            case RESERVAS_ATIVAS -> throw new Falha("409", RESERVAS_ATIVAS);
+            default -> {
+            }
+        }
+        return Json.resposta("delete_room_response", "200", "Sala removida com sucesso");
+    }
+
+    private JsonObject listReservations(JsonObject req) throws Exception {
+        String formatoInvalido = "Filtros em formato invalido";
+        String token = token(req, formatoInvalido);
+        String scope = opcional(req, "scope", formatoInvalido);
+        String date = opcional(req, "date", formatoInvalido);
+        String roomId = opcional(req, "room_id", formatoInvalido);
+        if ((scope != null && !SCOPES.contains(scope))
+                || (date != null && !confere(DATE, date))
+                || (roomId != null && !confere(ROOM_ID, roomId))) {
+            throw new Falha("400", formatoInvalido);
+        }
+
+        Usuario usuario = sessao(token);
+        // Sem scope vale "mine"; "all" e so para admin (whitelist, protocolo 3.14)
+        boolean todas = "all".equals(scope);
+        if (todas && !banco.tokenEhAdmin(token)) {
+            throw new Falha("403", "Permissao insuficiente");
+        }
+        JsonArray lista = new JsonArray();
+        for (BancoDados.Reserva reserva : banco.listarReservas(todas ? null : usuario.id(), date,
+                roomId == null ? null : Long.parseLong(roomId))) {
+            JsonObject item = new JsonObject();
+            item.addProperty("reservation_id", String.valueOf(reserva.id()));
+            item.addProperty("room_id", String.valueOf(reserva.roomId()));
+            item.addProperty("name", reserva.roomName());
+            item.addProperty("user", reserva.user());
+            item.addProperty("date", reserva.date());
+            item.addProperty("start_time", reserva.startTime());
+            item.addProperty("end_time", reserva.endTime());
+            item.addProperty("topic", reserva.topic());
+            item.addProperty("participants", String.valueOf(reserva.participants()));
+            lista.add(item);
+        }
+        JsonObject resposta = Json.resposta("list_reservations_response", "200", "Consulta realizada com sucesso");
+        resposta.addProperty("count", String.valueOf(lista.size()));
+        resposta.add("reservations", lista);
+        return resposta;
+    }
+
+    /** Campos da sala na ordem do protocolo; available so entra quando informado; schedule e a extensao do projeto. */
+    private static JsonObject salaJson(JsonObject destino, Sala sala, String available) {
+        destino.addProperty("room_id", String.valueOf(sala.id()));
+        destino.addProperty("name", sala.name());
+        destino.addProperty("capacity", String.valueOf(sala.capacity()));
+        destino.addProperty("location", sala.location());
+        JsonArray resources = new JsonArray();
+        sala.resources().forEach(resources::add);
+        destino.add("resources", resources);
+        destino.addProperty("room_status", sala.roomStatus());
+        if (available != null) {
+            destino.addProperty("available", available);
+        }
+        JsonArray schedule = new JsonArray();
+        for (Horario horario : sala.schedule()) {
+            JsonObject item = new JsonObject();
+            item.addProperty("day", horario.day());
+            item.addProperty("slot", horario.slot());
+            schedule.add(item);
+        }
+        destino.add("schedule", schedule);
+        return destino;
+    }
+
+    /** resources: array obrigatorio (pode ser vazio) cujos itens sao todos strings. */
+    private static List<String> recursos(JsonObject req, String formatoInvalido) throws Falha {
+        JsonElement valor = req.get("resources");
+        if (valor == null || !valor.isJsonArray()) {
+            throw new Falha("400", formatoInvalido);
+        }
+        List<String> recursos = new ArrayList<>();
+        for (JsonElement item : valor.getAsJsonArray()) {
+            if (!ehString(item)) {
+                throw new Falha("400", formatoInvalido);
+            }
+            recursos.add(item.getAsString());
+        }
+        return recursos;
+    }
+
+    /** schedule: array de {"day", "slot"} com valores da lista de dias e blocos; par repetido e invalido. */
+    private static List<Horario> horarios(JsonObject req, String formatoInvalido) throws Falha {
+        JsonElement valor = req.get("schedule");
+        if (valor == null || !valor.isJsonArray()) {
+            throw new Falha("400", formatoInvalido);
+        }
+        Set<Horario> horarios = new HashSet<>();
+        for (JsonElement item : valor.getAsJsonArray()) {
+            if (!item.isJsonObject()) {
+                throw new Falha("400", formatoInvalido);
+            }
+            JsonObject objeto = item.getAsJsonObject();
+            Horario horario = new Horario(texto(objeto, "day", formatoInvalido), texto(objeto, "slot", formatoInvalido));
+            if (!Horarios.valido(horario) || !horarios.add(horario)) {
+                throw new Falha("400", formatoInvalido);
+            }
+        }
+        return List.copyOf(horarios);
+    }
+
     /**
      * Le o token da requisicao. Token ausente responde 401 (aba "Codigos de Status");
      * nulo, de outro tipo ou fora do formato responde 400.
@@ -414,6 +660,11 @@ public class TratadorCliente extends Thread {
     /** O token ja foi invalidado pela propria operacao; nada a fazer quando a conexao cair. */
     private void esquecerToken(String token) {
         tokensDaConexao.remove(token);
+    }
+
+    /** Campo opcional: ausente devolve null; presente precisa ser string (null ou outro tipo responde 400). */
+    private static String opcional(JsonObject req, String chave, String formatoInvalido) throws Falha {
+        return req.has(chave) ? texto(req, chave, formatoInvalido) : null;
     }
 
     /** Campo obrigatorio do tipo string; ausente, nulo ou de outro tipo responde 400 (protocolo 2.10). */
