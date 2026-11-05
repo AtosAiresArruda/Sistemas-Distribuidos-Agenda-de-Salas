@@ -106,6 +106,30 @@ class BancoDadosTest {
         assertNotNull(reiniciado.abrirSessao(reiniciado.buscarPorUser("admin").id()));
     }
 
+    @Test
+    void horariosDaEp22ViramCodigoDaUtfpr() throws Exception {
+        // Banco da EP-2.2: horarios como (day, slot) na tabela sala_horarios
+        try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + arquivo());
+             Statement st = c.createStatement()) {
+            st.execute("CREATE TABLE salas (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, "
+                    + "capacity INTEGER NOT NULL, location TEXT NOT NULL, resources TEXT NOT NULL, room_status TEXT NOT NULL)");
+            st.execute("INSERT INTO salas (name, capacity, location, resources, room_status) "
+                    + "VALUES ('Sala A', 10, 'Bloco A', '[]', 'active')");
+            st.execute("CREATE TABLE sala_horarios (sala_id INTEGER NOT NULL, day TEXT NOT NULL, slot TEXT NOT NULL, "
+                    + "PRIMARY KEY (sala_id, day, slot))");
+            st.execute("INSERT INTO sala_horarios VALUES (1, 'sabado', 'N5'), (1, 'segunda', 'M1'), (1, 'quarta', 'T3')");
+        }
+
+        BancoDados banco = new BancoDados(arquivo());
+        assertEquals(List.of("2M1", "4T3", "7N5"), banco.buscarSala(1).slots());
+        // A tabela antiga sai; reabrir o banco nao repete a migracao
+        try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + arquivo());
+             Statement st = c.createStatement()) {
+            assertFalse(st.executeQuery("SELECT 1 FROM sqlite_master WHERE name = 'sala_horarios'").next());
+        }
+        assertEquals(List.of("2M1", "4T3", "7N5"), new BancoDados(arquivo()).buscarSala(1).slots());
+    }
+
     private String arquivo() {
         return pasta.resolve("teste.db").toString();
     }

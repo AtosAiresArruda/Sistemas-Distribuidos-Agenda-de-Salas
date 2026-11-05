@@ -2,8 +2,8 @@ package br.edu.utfpr.sd.servidor;
 
 import br.edu.utfpr.sd.comum.ConexaoJson;
 import br.edu.utfpr.sd.comum.Horarios;
-import br.edu.utfpr.sd.comum.Horarios.Horario;
 import br.edu.utfpr.sd.comum.Json;
+import br.edu.utfpr.sd.servidor.BancoDados.ReservaDoDia;
 import br.edu.utfpr.sd.servidor.BancoDados.Sala;
 import br.edu.utfpr.sd.servidor.BancoDados.Usuario;
 import com.google.gson.JsonArray;
@@ -13,6 +13,8 @@ import com.google.gson.JsonParseException;
 import java.io.IOException;
 import java.net.Socket;
 import java.net.SocketTimeoutException;
+import java.time.LocalDate;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -39,7 +41,7 @@ public class TratadorCliente extends Thread {
     private static final Pattern CAPACITY = Pattern.compile("^[1-9][0-9]{0,3}$");
     private static final Pattern LOCATION = Pattern.compile("^[A-Za-z0-9 ,.-]{1,60}$");
     private static final Pattern DATE = Pattern.compile("^[0-9]{4}-[0-9]{2}-[0-9]{2}$");
-    private static final Pattern TIME = Pattern.compile("^([01][0-9]|2[0-3]):[0-5][0-9]$");
+    // start_time e end_time: inicio e fim de aula da tabela da UTFPR (Horarios.INICIOS e Horarios.FINS)
 
     // Dicionario: valores fixos (case-sensitive)
     private static final Set<String> ROLES = Set.of("user", "admin");
@@ -220,12 +222,14 @@ public class TratadorCliente extends Thread {
             throw new Falha("400", formatoInvalido);
         }
 
-        // Usuario inexistente e senha errada tem a mesma resposta, para nao revelar quem existe
-        Usuario usuario = banco.autenticar(email, password);
+        // Ordem fixa (protocolo 3.12): formato (acima) -> credenciais -> sessao ativa. Usuario inexistente e
+        // senha errada tem a mesma resposta; conferir a sessao e criar o token ficam no mesmo lock (3.11)
+        BancoDados.Login login = banco.entrar(email, password);
+        Usuario usuario = login.usuario();
         if (usuario == null) {
             throw new Falha("401", "Email ou senha incorretos");
         }
-        String token = banco.abrirSessao(usuario.id());
+        String token = login.token();
         if (token == null) {
             throw new Falha("409", "Usuario ja possui sessao ativa");
         }
@@ -404,15 +408,18 @@ public class TratadorCliente extends Thread {
         String capacity = texto(req, "capacity", formatoInvalido);
         String location = texto(req, "location", formatoInvalido);
         List<String> resources = recursos(req, formatoInvalido);
-        // schedule (extensao do projeto) e opcional: sem ele a sala nasce sem horarios
-        List<Horario> schedule = req.has("schedule") ? horarios(req, formatoInvalido) : List.of();
+        // slots e obrigatorio, com pelo menos um horario e sem repetir (protocolo 8.2)
+        List<String> slots = slots(req, formatoInvalido);
+        if (slots.isEmpty()) {
+            throw new Falha("400", formatoInvalido);
+        }
         // Em criacao, "" e invalido (protocolo 2.11): as regex ja exigem pelo menos 1 caractere
         if (!confere(NAME, name) || !confere(CAPACITY, capacity) || !confere(LOCATION, location)) {
             throw new Falha("400", formatoInvalido);
         }
 
         sessaoAdmin(token);
-        Long roomId = banco.criarSala(name, Integer.parseInt(capacity), location, resources, schedule);
+        Long roomId = banco.criarSala(name, Integer.parseInt(capacity), location, resources, slots);
         if (roomId == null) {
             throw new Falha("409", "Sala ja cadastrada");
         }
@@ -430,11 +437,12 @@ public class TratadorCliente extends Thread {
         String minCapacity = opcional(req, "min_capacity", formatoInvalido);
         // date, start_time e end_time vem juntos ou nenhum deles
         int trio = (date == null ? 0 : 1) + (startTime == null ? 0 : 1) + (endTime == null ? 0 : 1);
-        if ((trio != 0 && trio != 3)
-                || (date != null && !confere(DATE, date))
-                || (startTime != null && !confere(TIME, startTime))
-                || (endTime != null && !confere(TIME, endTime))
-                || (minCapacity != null && !confere(CAPACITY, minCapacity))) {
+        if ((trio != 0 && trio != 3) || (minCapacity != null && !confere(CAPACITY, minCapacity))) {
+            throw new Falha("400", formatoInvalido);
+        }
+        // Com o trio: data existente; inicio e fim de aula da UTFPR, com o fim depois do inicio (protocolo 8.3)
+        LocalDate data = trio == 3 ? data(date, formatoInvalido) : null;
+        if (trio == 3 && !Horarios.periodoValido(startTime, endTime)) {
             throw new Falha("400", formatoInvalido);
         }
 
@@ -442,7 +450,7 @@ public class TratadorCliente extends Thread {
         JsonArray lista = new JsonArray();
         for (Sala sala : banco.listarSalas(minCapacity == null ? null : Integer.parseInt(minCapacity))) {
             // available so aparece quando o trio de horario e enviado
-            String available = trio == 3 ? String.valueOf(banco.disponivel(sala, date, startTime, endTime)) : null;
+            String available = trio == 3 ? String.valueOf(banco.disponivel(sala, data, startTime, endTime)) : null;
             lista.add(salaJson(new JsonObject(), sala, available));
         }
         JsonObject resposta = Json.resposta("list_rooms_response", "200", "Consulta realizada com sucesso");
@@ -455,16 +463,57 @@ public class TratadorCliente extends Thread {
         String formatoInvalido = "Dados em formato invalido";
         String token = token(req, formatoInvalido);
         String roomId = texto(req, "room_id", formatoInvalido);
+        // date e opcional; com ele a resposta traz a agenda do dia (protocolo 8.5)
+        String date = opcional(req, "date", formatoInvalido);
         if (!confere(ROOM_ID, roomId)) {
             throw new Falha("400", formatoInvalido);
         }
+        LocalDate data = date == null ? null : data(date, formatoInvalido);
 
-        sessao(token);
+        Usuario usuario = sessao(token);
         Sala sala = banco.buscarSala(Long.parseLong(roomId));
         if (sala == null) {
             throw new Falha("404", SALA_NAO_ENCONTRADA);
         }
-        return salaJson(Json.resposta("read_room_response", "200", "Consulta realizada com sucesso"), sala, null);
+        JsonObject resposta = salaJson(Json.resposta("read_room_response", "200", "Consulta realizada com sucesso"),
+                sala, null);
+        if (data != null) {
+            resposta.addProperty("date", date);
+            resposta.add("agenda", agenda(sala, data, usuario, banco.tokenEhAdmin(token)));
+        }
+        return resposta;
+    }
+
+    /**
+     * Agenda do read_room (protocolo 8.5): um item por horario da sala no dia da semana da data, na ordem da tabela.
+     * Horario com reserva ou sala inactive fica "indisponivel"; o reservado traz quem reservou (user), e o
+     * reservation_id so vai para o admin (whitelist) e para o dono da reserva. Domingo ou dia sem aula: lista vazia.
+     */
+    private JsonArray agenda(Sala sala, LocalDate data, Usuario leitor, boolean admin) throws Exception {
+        List<ReservaDoDia> reservas = banco.reservasDoDia(sala.id(), data.toString());
+        JsonArray agenda = new JsonArray();
+        for (String slot : Horarios.slotsDoDia(sala.slots(), Horarios.diaDaSemana(data))) {
+            String inicio = Horarios.inicio(Horarios.aula(slot));
+            String fim = Horarios.fim(Horarios.aula(slot));
+            // Mesma regra de conflito das reservas (5.4): a reserva ocupa a aula se os intervalos se sobrepoem
+            ReservaDoDia reserva = reservas.stream()
+                    .filter(r -> r.startTime().compareTo(fim) < 0 && r.endTime().compareTo(inicio) > 0)
+                    .findFirst().orElse(null);
+            JsonObject item = new JsonObject();
+            item.addProperty("slot", slot);
+            item.addProperty("start_time", inicio);
+            item.addProperty("end_time", fim);
+            item.addProperty("slot_status",
+                    reserva == null && "active".equals(sala.roomStatus()) ? "livre" : "indisponivel");
+            if (reserva != null) {
+                item.addProperty("user", reserva.user());
+                if (admin || reserva.usuarioId() == leitor.id()) {
+                    item.addProperty("reservation_id", String.valueOf(reserva.id()));
+                }
+            }
+            agenda.add(item);
+        }
+        return agenda;
     }
 
     private JsonObject updateRoom(JsonObject req) throws Exception {
@@ -475,9 +524,9 @@ public class TratadorCliente extends Thread {
         String capacity = texto(req, "capacity", formatoInvalido);
         String location = texto(req, "location", formatoInvalido);
         String roomStatus = texto(req, "room_status", formatoInvalido);
-        // resources e sempre a lista completa; schedule ausente mantem os horarios
+        // resources e sempre a lista completa; slots ausente ou [] mantem os horarios (protocolo 8.7)
         List<String> resources = recursos(req, formatoInvalido);
-        List<Horario> schedule = req.has("schedule") ? horarios(req, formatoInvalido) : null;
+        List<String> slots = req.has("slots") ? slots(req, formatoInvalido) : List.of();
         // String vazia significa "nao alterar"
         if (!confere(ROOM_ID, roomId)
                 || (!name.isEmpty() && !confere(NAME, name))
@@ -490,7 +539,7 @@ public class TratadorCliente extends Thread {
         sessaoAdmin(token);
         BancoDados.AlteracaoSala alteracao = new BancoDados.AlteracaoSala(vazioComoNulo(name),
                 capacity.isEmpty() ? null : Integer.parseInt(capacity), vazioComoNulo(location), resources,
-                vazioComoNulo(roomStatus), schedule);
+                vazioComoNulo(roomStatus), slots.isEmpty() ? null : slots);
         switch (banco.atualizarSala(Long.parseLong(roomId), alteracao)) {
             case NAO_ENCONTRADO -> throw new Falha("404", SALA_NAO_ENCONTRADA);
             case NOME_EM_USO -> throw new Falha("409", "Sala ja cadastrada");
@@ -559,7 +608,7 @@ public class TratadorCliente extends Thread {
         return resposta;
     }
 
-    /** Campos da sala na ordem do protocolo; available so entra quando informado; schedule e a extensao do projeto. */
+    /** Campos da sala na ordem do protocolo; available so entra quando informado (list_rooms com o trio). */
     private static JsonObject salaJson(JsonObject destino, Sala sala, String available) {
         destino.addProperty("room_id", String.valueOf(sala.id()));
         destino.addProperty("name", sala.name());
@@ -569,17 +618,12 @@ public class TratadorCliente extends Thread {
         sala.resources().forEach(resources::add);
         destino.add("resources", resources);
         destino.addProperty("room_status", sala.roomStatus());
+        JsonArray slots = new JsonArray();
+        sala.slots().forEach(slots::add);
+        destino.add("slots", slots);
         if (available != null) {
             destino.addProperty("available", available);
         }
-        JsonArray schedule = new JsonArray();
-        for (Horario horario : sala.schedule()) {
-            JsonObject item = new JsonObject();
-            item.addProperty("day", horario.day());
-            item.addProperty("slot", horario.slot());
-            schedule.add(item);
-        }
-        destino.add("schedule", schedule);
         return destino;
     }
 
@@ -599,24 +643,34 @@ public class TratadorCliente extends Thread {
         return recursos;
     }
 
-    /** schedule: array de {"day", "slot"} com valores da lista de dias e blocos; par repetido e invalido. */
-    private static List<Horario> horarios(JsonObject req, String formatoInvalido) throws Falha {
-        JsonElement valor = req.get("schedule");
+    /**
+     * slots: array de strings no codigo da UTFPR (regex do dicionario, ex.: "2M1"), sem repetir (protocolo 8.2).
+     * Ausente, nulo, de outro tipo, com item invalido ou repetido responde 400. Pode voltar vazio: quem chama decide.
+     */
+    private static List<String> slots(JsonObject req, String formatoInvalido) throws Falha {
+        JsonElement valor = req.get("slots");
         if (valor == null || !valor.isJsonArray()) {
             throw new Falha("400", formatoInvalido);
         }
-        Set<Horario> horarios = new HashSet<>();
+        Set<String> slots = new HashSet<>();
         for (JsonElement item : valor.getAsJsonArray()) {
-            if (!item.isJsonObject()) {
-                throw new Falha("400", formatoInvalido);
-            }
-            JsonObject objeto = item.getAsJsonObject();
-            Horario horario = new Horario(texto(objeto, "day", formatoInvalido), texto(objeto, "slot", formatoInvalido));
-            if (!Horarios.valido(horario) || !horarios.add(horario)) {
+            if (!ehString(item) || !Horarios.valido(item.getAsString()) || !slots.add(item.getAsString())) {
                 throw new Falha("400", formatoInvalido);
             }
         }
-        return List.copyOf(horarios);
+        return slots.stream().sorted(Horarios.ORDEM).toList();
+    }
+
+    /** Data no formato do dicionario e existente no calendario (a regex aceita "2026-02-30"); senao 400. */
+    private static LocalDate data(String date, String formatoInvalido) throws Falha {
+        if (!confere(DATE, date)) {
+            throw new Falha("400", formatoInvalido);
+        }
+        try {
+            return LocalDate.parse(date);
+        } catch (DateTimeParseException e) {
+            throw new Falha("400", formatoInvalido);
+        }
     }
 
     /**

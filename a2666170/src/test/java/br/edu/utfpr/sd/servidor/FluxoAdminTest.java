@@ -22,6 +22,7 @@ import org.junit.jupiter.api.io.TempDir;
 class FluxoAdminTest {
 
     private static final String CONSULTA = "Consulta realizada com sucesso";
+    // Uma segunda-feira (dia 2 no codigo da UTFPR)
     private static final String FUTURA = "2099-03-02";
 
     @TempDir
@@ -115,8 +116,7 @@ class FluxoAdminTest {
         assertEquals("Sala B12", sala.get("name").getAsString());
         assertEquals("12", sala.get("capacity").getAsString());
         assertEquals("active", sala.get("room_status").getAsString());
-        assertEquals("[{\"day\":\"segunda\",\"slot\":\"M1\"},{\"day\":\"segunda\",\"slot\":\"M2\"},"
-                + "{\"day\":\"quarta\",\"slot\":\"N5\"}]", sala.get("schedule").toString());
+        assertEquals("[\"2M1\",\"2M2\",\"4N5\"]", sala.get("slots").toString());
     }
 
     @Test
@@ -125,7 +125,7 @@ class FluxoAdminTest {
         try (ServidorDeTeste.Cliente joao = servidor.conectar()) {
             joao.cadastrarELogar("joao");
         }
-        servidor.reservar("joao", 1, FUTURA, "14:00", "16:00", 6);
+        servidor.reservar("joao", 1, FUTURA, "07:30", "09:10", 6);
 
         JsonObject lista = admin.comToken("list_rooms", tokenAdmin);
         assertResposta(lista, "list_rooms_response", "200", CONSULTA);
@@ -133,12 +133,20 @@ class FluxoAdminTest {
         assertEquals("Sala B12", sala.get("name").getAsString());
         assertEquals("12", sala.get("capacity").getAsString());
         assertEquals("active", sala.get("room_status").getAsString());
-        assertEquals(3, sala.getAsJsonArray("schedule").size());
+        assertEquals(3, sala.getAsJsonArray("slots").size());
 
         // Livre ou ocupada no periodo
         JsonObject periodo = admin.enviar("{\"op\":\"list_rooms\",\"token\":\"" + tokenAdmin + "\",\"date\":\"" + FUTURA
-                + "\",\"start_time\":\"15:00\",\"end_time\":\"15:30\"}");
+                + "\",\"start_time\":\"08:20\",\"end_time\":\"09:10\"}");
         assertEquals("false", periodo.getAsJsonArray("rooms").get(0).getAsJsonObject().get("available").getAsString());
+
+        // Agenda do dia (regra 8.5): cada horario da sala, livre ou indisponivel, e quem reservou
+        JsonObject dia = admin.enviar("{\"op\":\"read_room\",\"token\":\"" + tokenAdmin + "\",\"room_id\":\"1\","
+                + "\"date\":\"" + FUTURA + "\"}");
+        assertResposta(dia, "read_room_response", "200", CONSULTA);
+        assertEquals("[{\"slot\":\"2M1\",\"start_time\":\"07:30\",\"end_time\":\"08:20\",\"slot_status\":\"indisponivel\","
+                + "\"user\":\"joao\",\"reservation_id\":\"1\"},{\"slot\":\"2M2\",\"start_time\":\"08:20\",\"end_time\":\"09:10\","
+                + "\"slot_status\":\"indisponivel\",\"user\":\"joao\",\"reservation_id\":\"1\"}]", dia.get("agenda").toString());
 
         // Quem reservou e quando
         JsonObject agenda = admin.enviar("{\"op\":\"list_reservations\",\"token\":\"" + tokenAdmin
@@ -147,8 +155,8 @@ class FluxoAdminTest {
         JsonObject reserva = agenda.getAsJsonArray("reservations").get(0).getAsJsonObject();
         assertEquals("joao", reserva.get("user").getAsString());
         assertEquals(FUTURA, reserva.get("date").getAsString());
-        assertEquals("14:00", reserva.get("start_time").getAsString());
-        assertEquals("16:00", reserva.get("end_time").getAsString());
+        assertEquals("07:30", reserva.get("start_time").getAsString());
+        assertEquals("09:10", reserva.get("end_time").getAsString());
         assertEquals("Sala B12", reserva.get("name").getAsString());
     }
 
@@ -158,7 +166,7 @@ class FluxoAdminTest {
 
         assertResposta(admin.enviar("{\"op\":\"update_room\",\"token\":\"" + tokenAdmin + "\",\"room_id\":\"1\","
                         + "\"name\":\"Sala B13\",\"capacity\":\"20\",\"location\":\"\",\"resources\":[\"projetor\"],"
-                        + "\"room_status\":\"inactive\",\"schedule\":[{\"day\":\"sabado\",\"slot\":\"T1\"}]}"),
+                        + "\"room_status\":\"inactive\",\"slots\":[\"7T1\",\"2M1\"]}"),
                 "update_room_response", "200", "Sala atualizada com sucesso");
 
         JsonObject sala = admin.enviar("{\"op\":\"read_room\",\"token\":\"" + tokenAdmin + "\",\"room_id\":\"1\"}");
@@ -166,10 +174,10 @@ class FluxoAdminTest {
         assertEquals("20", sala.get("capacity").getAsString());
         assertEquals("Bloco B", sala.get("location").getAsString());
         assertEquals("inactive", sala.get("room_status").getAsString());
-        assertEquals("[{\"day\":\"sabado\",\"slot\":\"T1\"}]", sala.get("schedule").toString());
-        // Indisponivel: nao aparece como livre em nenhum periodo
+        assertEquals("[\"2M1\",\"7T1\"]", sala.get("slots").toString());
+        // Indisponivel: nao aparece como livre nem num horario em que a sala funciona
         JsonObject periodo = admin.enviar("{\"op\":\"list_rooms\",\"token\":\"" + tokenAdmin + "\",\"date\":\"" + FUTURA
-                + "\",\"start_time\":\"08:00\",\"end_time\":\"09:00\"}");
+                + "\",\"start_time\":\"07:30\",\"end_time\":\"08:20\"}");
         assertEquals("false", periodo.getAsJsonArray("rooms").get(0).getAsJsonObject().get("available").getAsString());
     }
 
@@ -187,8 +195,7 @@ class FluxoAdminTest {
 
     private JsonObject criarSalaB12() throws Exception {
         return admin.enviar("{\"op\":\"create_room\",\"token\":\"" + tokenAdmin + "\",\"name\":\"Sala B12\","
-                + "\"capacity\":\"12\",\"location\":\"Bloco B\",\"resources\":[\"tv\"],\"schedule\":["
-                + "{\"day\":\"quarta\",\"slot\":\"N5\"},{\"day\":\"segunda\",\"slot\":\"M2\"},{\"day\":\"segunda\",\"slot\":\"M1\"}]}");
+                + "\"capacity\":\"12\",\"location\":\"Bloco B\",\"resources\":[\"tv\"],\"slots\":[\"4N5\",\"2M2\",\"2M1\"]}");
     }
 
     private static List<String> campo(JsonArray lista, String chave) {

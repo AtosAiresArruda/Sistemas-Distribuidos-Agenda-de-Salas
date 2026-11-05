@@ -2,7 +2,6 @@ package br.edu.utfpr.sd.cliente;
 
 import br.edu.utfpr.sd.comum.ConexaoJson;
 import br.edu.utfpr.sd.comum.Horarios;
-import br.edu.utfpr.sd.comum.Horarios.Horario;
 import br.edu.utfpr.sd.comum.Json;
 import br.edu.utfpr.sd.comum.ValidacaoCadastro;
 import br.edu.utfpr.sd.comum.ValidacaoSala;
@@ -67,6 +66,8 @@ public class ClienteApp extends Application {
 
     private static final String SEM_CONEXAO = "Desconectado";
     private static final String NAO_ALTERAR = "(nao alterar)";
+    // Primeiro item das listas de horario do filtro: nenhum horario escolhido, a chave nao e enviada
+    private static final String SEM_FILTRO = "";
     private static final String RESPOSTA_GRANDE =
             "Resposta do servidor excede " + ConexaoJson.TAMANHO_MAXIMO + " bytes e foi descartada.";
 
@@ -141,8 +142,9 @@ public class ClienteApp extends Application {
     private final TableView<JsonObject> tabelaSalas = new TableView<>();
     private final Label contagemSalas = new Label("Ainda nao listado.");
     private final TextField filtroData = new TextField();
-    private final TextField filtroInicio = new TextField();
-    private final TextField filtroFim = new TextField();
+    // Protocolo 8.3: start_time e o inicio de uma aula e end_time o fim de uma aula da UTFPR
+    private final ComboBox<String> filtroInicio = listaHorarios(Horarios.INICIOS);
+    private final ComboBox<String> filtroFim = listaHorarios(Horarios.FINS);
     private final TextField filtroCapacidade = new TextField();
     private final TextField salaAlvo = new TextField();
     private final Label salaLidaId = valorLido();
@@ -152,6 +154,9 @@ public class ClienteApp extends Application {
     private final Label salaLidaRecursos = valorLido();
     private final Label salaLidaStatus = valorLido();
     private final Label salaLidaHorarios = valorLido();
+    private final TextField leituraData = new TextField();
+    private final TableView<JsonObject> tabelaAgenda = new TableView<>();
+    private final Label contagemAgenda = new Label("Informe uma data para ver a agenda do dia.");
     private final TextField novaSalaNome = new TextField();
     private final TextField novaSalaCapacidade = new TextField();
     private final TextField novaSalaLocal = new TextField();
@@ -163,7 +168,7 @@ public class ClienteApp extends Application {
     private final TextField editSalaRecursos = new TextField();
     private final ComboBox<String> editSalaStatus =
             new ComboBox<>(FXCollections.observableArrayList(NAO_ALTERAR, "active", "inactive"));
-    private final CheckBox editSalaEnviarHorarios = new CheckBox("Substituir os horarios (envia schedule)");
+    private final CheckBox editSalaEnviarHorarios = new CheckBox("Substituir os horarios (envia slots)");
     private final GradeHorarios editSalaHorarios = new GradeHorarios();
     private final TextField agendaData = new TextField();
     private final TableView<JsonObject> tabelaReservas = new TableView<>();
@@ -376,7 +381,7 @@ public class ClienteApp extends Application {
         tabelaSalas.getColumns().add(coluna("resources", 120, s -> String.join(", ", recursos(s))));
         tabelaSalas.getColumns().add(coluna("room_status", 130, s -> statusLegivel(texto(s, "room_status"))));
         tabelaSalas.getColumns().add(colunaJson("available", 70));
-        tabelaSalas.getColumns().add(coluna("schedule", 260, s -> Horarios.resumo(GradeHorarios.lerSchedule(s))));
+        tabelaSalas.getColumns().add(coluna("slots", 260, s -> Horarios.resumo(GradeHorarios.lerSlots(s))));
         tabelaSalas.setPrefHeight(220);
         tabelaSalas.getSelectionModel().selectedItemProperty().addListener((obs, antes, sala) -> {
             if (sala != null) {
@@ -384,8 +389,6 @@ public class ClienteApp extends Application {
             }
         });
         filtroData.setPromptText("AAAA-MM-DD");
-        filtroInicio.setPromptText("HH:MM");
-        filtroFim.setPromptText("HH:MM");
         filtroCapacidade.setPromptText("ex.: 6");
         GridPane filtros = formulario(
                 "Data", filtroData,
@@ -393,7 +396,8 @@ public class ClienteApp extends Application {
                 "Fim", filtroFim,
                 "Cap. minima", filtroCapacidade);
         Label dicaFiltros = new Label("Filtros opcionais (em branco = nao enviados). Data, inicio e fim vao juntos; "
-                + "com eles cada sala vem com \"available\".");
+                + "com eles cada sala vem com \"available\". Inicio e fim sao os horarios das aulas da UTFPR "
+                + "(ex.: 13:00 a 14:40 = T1 e T2); a sala so fica disponivel se funcionar em todas as aulas do periodo.");
         dicaFiltros.getStyleClass().add("dica");
         dicaFiltros.setWrapText(true);
         contagemSalas.getStyleClass().add("contador");
@@ -415,9 +419,21 @@ public class ClienteApp extends Application {
             valores[i].setWrapText(true);
             dados.addRow(i, new Label(rotulos[i] + ":"), valores[i]);
         }
+        tabelaAgenda.setPlaceholder(new Label("Sem agenda: informe a data antes de ler a sala."));
+        tabelaAgenda.getColumns().add(colunaJson("slot", 60));
+        tabelaAgenda.getColumns().add(colunaJson("start_time", 80));
+        tabelaAgenda.getColumns().add(colunaJson("end_time", 80));
+        tabelaAgenda.getColumns().add(colunaJson("slot_status", 100));
+        tabelaAgenda.getColumns().add(colunaJson("user", 100));
+        tabelaAgenda.getColumns().add(colunaJson("reservation_id", 100));
+        tabelaAgenda.setPrefHeight(180);
+        leituraData.setPromptText("AAAA-MM-DD (opcional: traz a agenda do dia)");
+        contagemAgenda.getStyleClass().add("contador");
         VBox cartaoLeitura = cartao("Ler sala",
-                "Envia read_room. Os dados lidos tambem preenchem o formulario de atualizacao.",
-                botao("Ler sala alvo (read_room)", this::readRoom), dados);
+                "Envia read_room. Com a data, o servidor devolve a agenda do dia: cada horario da sala como livre ou "
+                        + "indisponivel e quem reservou. Os dados lidos tambem preenchem o formulario de atualizacao.",
+                formulario("Data", leituraData), botao("Ler sala alvo (read_room)", this::readRoom), dados,
+                contagemAgenda, tabelaAgenda);
 
         novaSalaNome.setPromptText("Sala de Estudo B12");
         novaSalaCapacidade.setPromptText("12");
@@ -428,7 +444,8 @@ public class ClienteApp extends Application {
                 "Capacidade", novaSalaCapacidade,
                 "Localizacao", novaSalaLocal,
                 "Recursos", novaSalaRecursos);
-        Label dicaCriar = new Label("Dias e horarios em que a sala funciona (campo schedule). A sala nasce \"active\" (livre).");
+        Label dicaCriar = new Label("Marque na grade da UTFPR (dias x aulas) os horarios em que a sala funciona, "
+                + "pelo menos um (campo slots, ex.: segunda + M1 = 2M1). A sala nasce \"active\" (livre).");
         dicaCriar.getStyleClass().add("dica");
         dicaCriar.setWrapText(true);
         VBox cartaoCriar = cartao("Cadastrar sala", "Envia create_room. O servidor gera o room_id.",
@@ -448,7 +465,9 @@ public class ClienteApp extends Application {
                 "Status", editSalaStatus);
         Label dicaAtualizar = new Label("Campos em branco e \"" + NAO_ALTERAR + "\" vao como \"\" e nao sao alterados. "
                 + "Status: active = livre, inactive = indisponivel. Recursos sempre substituem a lista inteira. "
-                + "Use \"Ler sala\" antes para trazer os valores atuais.");
+                + "Horarios: com a caixa marcada, a grade substitui todos os horarios da sala (reservas ja feitas "
+                + "continuam); desmarcada, os horarios atuais sao mantidos. Use \"Ler sala\" antes para trazer os "
+                + "valores atuais.");
         dicaAtualizar.getStyleClass().add("dica");
         dicaAtualizar.setWrapText(true);
         editSalaHorarios.disableProperty().bind(editSalaEnviarHorarios.selectedProperty().not());
@@ -725,15 +744,14 @@ public class ClienteApp extends Application {
 
     private void listRooms() {
         String date = filtroData.getText().trim();
-        String inicio = filtroInicio.getText().trim();
-        String fim = filtroFim.getText().trim();
+        String inicio = valorOuVazio(filtroInicio);
+        String fim = valorOuVazio(filtroFim);
         String minCapacity = filtroCapacidade.getText().trim();
         int trio = (date.isEmpty() ? 0 : 1) + (inicio.isEmpty() ? 0 : 1) + (fim.isEmpty() ? 0 : 1);
         if (!dadosValidos(retornoSalas,
                 trio == 1 || trio == 2 ? "Informe data, inicio e fim juntos, ou deixe os tres em branco." : null,
                 date.isEmpty() ? null : ValidacaoSala.date(date),
-                inicio.isEmpty() ? null : ValidacaoSala.time("Inicio", inicio),
-                fim.isEmpty() ? null : ValidacaoSala.time("Fim", fim),
+                trio == 3 ? ValidacaoSala.periodo(inicio, fim) : null,
                 minCapacity.isEmpty() ? null : ValidacaoSala.minCapacity(minCapacity))) {
             return;
         }
@@ -756,28 +774,40 @@ public class ClienteApp extends Application {
         if (roomId == null) {
             return;
         }
+        String date = leituraData.getText().trim();
+        if (!dadosValidos(retornoSalas, date.isEmpty() ? null : ValidacaoSala.date(date))) {
+            return;
+        }
         JsonObject req = requisicaoComToken("read_room");
         req.addProperty("room_id", roomId);
+        adicionarSePreenchido(req, "date", date);
         enviar(req, retornoSalas, resp -> {
             limparLeituraSala();
             if (sucesso(resp)) {
-                List<Horario> horarios = GradeHorarios.lerSchedule(resp);
+                List<String> slots = GradeHorarios.lerSlots(resp);
                 salaLidaId.setText(texto(resp, "room_id"));
                 salaLidaNome.setText(texto(resp, "name"));
                 salaLidaCapacidade.setText(texto(resp, "capacity"));
                 salaLidaLocal.setText(texto(resp, "location"));
                 salaLidaRecursos.setText(String.join(", ", recursos(resp)));
                 salaLidaStatus.setText(statusLegivel(texto(resp, "room_status")));
-                // Servidores que nao usam a extensao "schedule" nao mandam o campo
-                salaLidaHorarios.setText(resp.has("schedule") ? Horarios.resumo(horarios) : "nao informado pelo servidor");
+                // Servidores de colegas ainda sem a versao 2.8 do protocolo podem nao mandar o campo
+                salaLidaHorarios.setText(resp.has("slots") ? Horarios.resumo(slots) : "nao informado pelo servidor");
+                if (!date.isEmpty()) {
+                    // Agenda do dia (protocolo 8.5): reservation_id so vem para o admin e para o dono da reserva
+                    tabelaAgenda.setItems(FXCollections.observableArrayList(objetos(resp, "agenda")));
+                    contagemAgenda.setText(resp.has("agenda")
+                            ? "Agenda de " + date + ": " + tabelaAgenda.getItems().size() + " horario(s) da sala nesse dia"
+                            : "O servidor nao devolveu a agenda.");
+                }
                 // Prepara a atualizacao com os valores atuais
                 editSalaNome.setText(texto(resp, "name"));
                 editSalaCapacidade.setText(texto(resp, "capacity"));
                 editSalaLocal.setText(texto(resp, "location"));
                 editSalaRecursos.setText(String.join(", ", recursos(resp)));
                 editSalaStatus.getSelectionModel().select(NAO_ALTERAR);
-                editSalaHorarios.marcar(horarios);
-                editSalaEnviarHorarios.setSelected(resp.has("schedule"));
+                editSalaHorarios.marcar(slots);
+                editSalaEnviarHorarios.setSelected(!slots.isEmpty());
             }
             recarregarSalasSeNaoEncontrada(resp);
         });
@@ -787,8 +817,10 @@ public class ClienteApp extends Application {
         String name = novaSalaNome.getText();
         String capacity = novaSalaCapacidade.getText().trim();
         String location = novaSalaLocal.getText();
+        // Protocolo 8.2: slots e obrigatorio, com pelo menos um horario
         if (!dadosValidos(retornoSalas, ValidacaoSala.name(name), ValidacaoSala.capacity(capacity),
-                ValidacaoSala.location(location))) {
+                ValidacaoSala.location(location), novaSalaHorarios.selecionados().isEmpty()
+                        ? "Horarios: marque na grade pelo menos um horario em que a sala funciona." : null)) {
             return;
         }
 
@@ -797,7 +829,7 @@ public class ClienteApp extends Application {
         req.addProperty("capacity", capacity);
         req.addProperty("location", location);
         req.add("resources", listaRecursos(novaSalaRecursos.getText()));
-        req.add("schedule", novaSalaHorarios.comoJson());
+        req.add("slots", novaSalaHorarios.comoJson());
         enviar(req, retornoSalas, resp -> {
             if (sucesso(resp)) {
                 // Aba "Codigos de Status": no 201 o cliente guarda o id devolvido
@@ -822,10 +854,14 @@ public class ClienteApp extends Application {
         String location = editSalaLocal.getText();
         String status = editSalaStatus.getValue();
         String roomStatus = status == null || NAO_ALTERAR.equals(status) ? "" : status;
-        // Campo vazio significa "nao alterar", entao so os preenchidos sao conferidos
+        // Campo vazio significa "nao alterar", entao so os preenchidos sao conferidos. Os horarios nao tem
+        // como ser esvaziados: slots [] significa "nao alterar" (protocolo 8.7)
+        boolean enviarSlots = editSalaEnviarHorarios.isSelected();
         if (!dadosValidos(retornoSalas, name.isEmpty() ? null : ValidacaoSala.name(name),
                 capacity.isEmpty() ? null : ValidacaoSala.capacity(capacity),
-                location.isEmpty() ? null : ValidacaoSala.location(location))) {
+                location.isEmpty() ? null : ValidacaoSala.location(location),
+                enviarSlots && editSalaHorarios.selecionados().isEmpty()
+                        ? "Horarios: marque pelo menos um horario, ou desmarque a caixa para manter os atuais." : null)) {
             return;
         }
 
@@ -837,8 +873,8 @@ public class ClienteApp extends Application {
         req.add("resources", listaRecursos(editSalaRecursos.getText()));
         req.addProperty("room_status", roomStatus);
         // Sem a caixa marcada a chave nao e enviada e o servidor mantem os horarios
-        if (editSalaEnviarHorarios.isSelected()) {
-            req.add("schedule", editSalaHorarios.comoJson());
+        if (enviarSlots) {
+            req.add("slots", editSalaHorarios.comoJson());
         }
         enviar(req, retornoSalas, resp -> {
             if (sucesso(resp)) {
@@ -949,6 +985,19 @@ public class ClienteApp extends Application {
             case "inactive" -> "inactive (indisponivel)";
             default -> roomStatus;
         };
+    }
+
+    /** Lista com os horarios da tabela de aulas; o primeiro item (vazio) significa "sem filtro". */
+    private static ComboBox<String> listaHorarios(List<String> horarios) {
+        ComboBox<String> lista = new ComboBox<>(FXCollections.observableArrayList(SEM_FILTRO));
+        lista.getItems().addAll(horarios);
+        lista.getSelectionModel().select(SEM_FILTRO);
+        lista.setMaxWidth(Double.MAX_VALUE);
+        return lista;
+    }
+
+    private static String valorOuVazio(ComboBox<String> lista) {
+        return lista.getValue() == null ? "" : lista.getValue();
     }
 
     private static void adicionarSePreenchido(JsonObject req, String chave, String valor) {
@@ -1239,11 +1288,13 @@ public class ClienteApp extends Application {
         contagemSalas.setText("Ainda nao listado.");
         tabelaReservas.getItems().clear();
         contagemReservas.setText("Ainda nao listado.");
-        for (TextField campo : new TextField[] {filtroData, filtroInicio, filtroFim, filtroCapacidade, salaAlvo,
+        for (TextField campo : new TextField[] {filtroData, filtroCapacidade, salaAlvo, leituraData,
                 novaSalaNome, novaSalaCapacidade, novaSalaLocal, novaSalaRecursos, editSalaNome, editSalaCapacidade,
                 editSalaLocal, editSalaRecursos, agendaData}) {
             campo.clear();
         }
+        filtroInicio.getSelectionModel().select(SEM_FILTRO);
+        filtroFim.getSelectionModel().select(SEM_FILTRO);
         novaSalaHorarios.limpar();
         editSalaHorarios.limpar();
         editSalaEnviarHorarios.setSelected(false);
@@ -1260,6 +1311,8 @@ public class ClienteApp extends Application {
                 salaLidaStatus, salaLidaHorarios}) {
             l.setText("-");
         }
+        tabelaAgenda.getItems().clear();
+        contagemAgenda.setText("Informe uma data para ver a agenda do dia.");
     }
 
     private String enderecoInformado() {

@@ -69,7 +69,7 @@ Também testado no cliente:
 |---|---|---|
 | `users` que não é lista | Tabela vazia, sem travar | OK |
 | Linha que não é JSON | Aviso "Resposta do servidor nao e um JSON valido." | OK |
-| `read_room` sem `schedule` (servidor de colega) | "nao informado pelo servidor" | OK |
+| `read_room` sem `slots` (servidor de colega) | "nao informado pelo servidor" | OK |
 | 403 | Mostra o motivo e mantém o token | OK |
 | 401 | Descarta o token, volta ao Login e remove as abas de admin | OK |
 | `read_user` com `role: "user"` numa sessão admin | Remove as abas de admin | OK |

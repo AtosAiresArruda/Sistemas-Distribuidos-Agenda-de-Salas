@@ -1,5 +1,7 @@
 package br.edu.utfpr.sd.comum;
 
+import java.time.LocalDate;
+import java.time.format.DateTimeParseException;
 import java.util.regex.Pattern;
 
 /**
@@ -13,7 +15,6 @@ public final class ValidacaoSala {
     public static final Pattern CAPACITY = Pattern.compile("^[1-9][0-9]{0,3}$");
     public static final Pattern LOCATION = Pattern.compile("^[A-Za-z0-9 ,.-]{1,60}$");
     public static final Pattern DATE = Pattern.compile("^[0-9]{4}-[0-9]{2}-[0-9]{2}$");
-    public static final Pattern TIME = Pattern.compile("^([01][0-9]|2[0-3]):[0-5][0-9]$");
 
     private ValidacaoSala() {
     }
@@ -36,15 +37,29 @@ public final class ValidacaoSala {
     }
 
     public static String date(String valor) {
-        return confere(DATE, valor, "Data invalida: formato AAAA-MM-DD (ex.: 2026-09-15).");
+        String problema = "Data invalida: formato AAAA-MM-DD, com dia e mes existentes (ex.: 2026-09-15).";
+        return confere(DATE, valor, problema) == null && dataExiste(valor) ? null : problema;
     }
 
-    public static String time(String rotulo, String valor) {
-        return confere(TIME, valor, rotulo + " invalido: formato HH:MM de 00:00 a 23:59 (ex.: 14:00).");
+    /** Protocolo 8.3: inicio de uma aula e fim de uma aula da UTFPR, com o fim depois do inicio. */
+    public static String periodo(String inicio, String fim) {
+        return Horarios.periodoValido(inicio, fim) ? null
+                : "Periodo invalido: o inicio deve ser o comeco de uma aula, o fim o termino de uma aula, "
+                        + "e o fim deve vir depois do inicio (ex.: 13:00 a 14:40 = T1 e T2).";
     }
 
     public static String minCapacity(String valor) {
         return confere(CAPACITY, valor, "Capacidade minima invalida: numero de 1 a 9999, sem zeros a esquerda.");
+    }
+
+    /** A regex aceita "2026-02-30"; a data tambem precisa existir no calendario. */
+    public static boolean dataExiste(String valor) {
+        try {
+            LocalDate.parse(valor);
+            return true;
+        } catch (DateTimeParseException e) {
+            return false;
+        }
     }
 
     private static String confere(Pattern formato, String valor, String problema) {

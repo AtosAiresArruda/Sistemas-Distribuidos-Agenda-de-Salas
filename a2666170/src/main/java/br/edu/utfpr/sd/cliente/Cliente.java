@@ -174,15 +174,21 @@ public class Cliente {
         JsonObject resp = enviar(req);
         if (resp != null && "200".equals(texto(resp, "status"))) {
             token = null;
+        } else if (resp != null && "403".equals(texto(resp, "status"))) {
+            // Protocolo 3.9: senha de confirmacao errada responde 403 e a sessao continua
+            System.out.println("Nada foi removido. A sessao continua ativa.");
         }
     }
 
+    /** Protocolo 3.10: o token so e descartado com o logout_response (200, ou 401 se ja nao valia). */
     private void logout() throws IOException {
         if (!exigirSessao()) {
             return;
         }
         JsonObject resp = enviar(requisicaoComToken("logout"));
-        if (resp != null && "200".equals(texto(resp, "status"))) {
+        if (resp == null) {
+            System.out.println("Sem resposta do servidor: o token foi mantido. Tente o logout novamente.");
+        } else if ("200".equals(texto(resp, "status"))) {
             token = null;
         }
     }
@@ -199,9 +205,31 @@ public class Cliente {
         }
     }
 
-    /** Envia a requisicao e devolve a resposta, ou null se nao houve resposta valida. */
+    /**
+     * Envia a requisicao e devolve a resposta, ou null se nao houve resposta valida. Se a conexao que ja estava
+     * aberta caiu antes da resposta (ex.: o servidor fechou por 300 s de inatividade), abre outra e reenvia a
+     * mesma requisicao, com o mesmo token, uma unica vez (protocolo 1.11).
+     */
     private JsonObject enviar(JsonObject requisicao) {
         try {
+            if (conexao != null) {
+                String linha = null;
+                try {
+                    conexao.enviar(requisicao);
+                    linha = conexao.receber();
+                } catch (ConexaoJson.MensagemMuitoGrandeException e) {
+                    System.out.println("Resposta do servidor excede " + ConexaoJson.TAMANHO_MAXIMO
+                            + " bytes e foi descartada.");
+                    return null;
+                } catch (IOException e) {
+                    // A conexao antiga caiu; reconecta abaixo
+                }
+                if (linha != null) {
+                    return interpretar(linha);
+                }
+                desconectar();
+                System.out.println("A conexao caiu antes da resposta. Reconectando para reenviar a requisicao.");
+            }
             conectarSeNecessario();
             conexao.enviar(requisicao);
             return receber();
@@ -214,11 +242,14 @@ public class Cliente {
     private JsonObject receber() throws IOException {
         String linha = conexao.receber();
         if (linha == null) {
-            System.out.println("O servidor encerrou a conexao. Ela sera reaberta na proxima operacao.");
+            System.out.println("O servidor encerrou a conexao sem responder. Ela sera reaberta na proxima operacao.");
             desconectar();
             return null;
         }
+        return interpretar(linha);
+    }
 
+    private JsonObject interpretar(String linha) {
         JsonObject resposta;
         try {
             resposta = Json.parseObjeto(linha);

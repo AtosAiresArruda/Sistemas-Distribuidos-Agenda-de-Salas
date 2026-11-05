@@ -1,7 +1,6 @@
 package br.edu.utfpr.sd.servidor;
 
 import br.edu.utfpr.sd.comum.Horarios;
-import br.edu.utfpr.sd.comum.Horarios.Horario;
 import br.edu.utfpr.sd.comum.Json;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -14,6 +13,7 @@ import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
@@ -53,9 +53,9 @@ public class BancoDados {
     public record Sessao(String token, String user, String email) {
     }
 
-    /** Sala com seus horarios (schedule, extensao do projeto) em ordem de dia e bloco. */
+    /** Sala com seus horarios de funcionamento (slots, codigo da UTFPR) na ordem da tabela de aulas. */
     public record Sala(long id, String name, int capacity, String location, List<String> resources,
-                       String roomStatus, List<Horario> schedule) {
+                       String roomStatus, List<String> slots) {
     }
 
     /** Reserva como devolvida no list_reservations: "roomName" e o nome da sala e "user" e o dono. */
@@ -63,16 +63,24 @@ public class BancoDados {
                           String endTime, String topic, int participants) {
     }
 
+    /** Reserva de uma sala num dia, para montar a agenda do read_room; "usuarioId" identifica o dono. */
+    public record ReservaDoDia(long id, long usuarioId, String user, String startTime, String endTime) {
+    }
+
     /** Novos valores de uma sala no update_room; null significa "nao alterar". */
     public record AlteracaoSala(String name, Integer capacity, String location, List<String> resources,
-                                String roomStatus, List<Horario> schedule) {
+                                String roomStatus, List<String> slots) {
+    }
+
+    /** Resultado do login: usuario null = credenciais incorretas; usuario com token null = sessao ativa. */
+    public record Login(Usuario usuario, String token) {
     }
 
     /** Resultado das operacoes de administrador sobre outro usuario ou sobre uma sala. */
     public enum Resultado { OK, NAO_ENCONTRADO, ULTIMO_ADMIN, USER_EM_USO, NOME_EM_USO, RESERVAS_ATIVAS }
 
     // Tabelas que a interface do servidor pode exibir
-    public static final List<String> TABELAS = List.of("usuarios", "tokens", "salas", "sala_horarios", "reservas");
+    public static final List<String> TABELAS = List.of("usuarios", "tokens", "salas", "sala_slots", "reservas");
 
     public BancoDados(String arquivo) throws SQLException {
         conexao = DriverManager.getConnection("jdbc:sqlite:" + arquivo);
@@ -111,12 +119,12 @@ public class BancoDados {
                         resources   TEXT NOT NULL,
                         room_status TEXT NOT NULL
                     )""");
+            // Horarios de funcionamento no codigo da UTFPR, um por linha (ex.: "2M1")
             st.execute("""
-                    CREATE TABLE IF NOT EXISTS sala_horarios (
+                    CREATE TABLE IF NOT EXISTS sala_slots (
                         sala_id INTEGER NOT NULL,
-                        day     TEXT NOT NULL,
                         slot    TEXT NOT NULL,
-                        PRIMARY KEY (sala_id, day, slot)
+                        PRIMARY KEY (sala_id, slot)
                     )""");
             // Ainda nao ha create_reservation; a tabela ja existe para list_reservations, delete_room e update_room
             st.execute("""
@@ -130,6 +138,26 @@ public class BancoDados {
                         topic        TEXT NOT NULL,
                         participants INTEGER NOT NULL
                     )""");
+        }
+        migrarHorariosAntigos();
+    }
+
+    /**
+     * Bancos da EP-2.2 guardavam os horarios como {"day": "segunda", "slot": "M1"} na tabela sala_horarios.
+     * O protocolo 2.8 usa o codigo da UTFPR: cada linha vira "2M1" em sala_slots e a tabela antiga sai.
+     */
+    private void migrarHorariosAntigos() throws SQLException {
+        try (Statement st = conexao.createStatement()) {
+            if (!st.executeQuery("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sala_horarios'").next()) {
+                return;
+            }
+            int migrados = st.executeUpdate("""
+                    INSERT OR IGNORE INTO sala_slots (sala_id, slot)
+                    SELECT sala_id, CASE day WHEN 'segunda' THEN '2' WHEN 'terca' THEN '3' WHEN 'quarta' THEN '4'
+                                             WHEN 'quinta' THEN '5' WHEN 'sexta' THEN '6' WHEN 'sabado' THEN '7' END || slot
+                    FROM sala_horarios""");
+            st.execute("DROP TABLE sala_horarios");
+            System.out.println(migrados + " horario(s) de sala convertidos para o codigo da UTFPR (ex.: 2M1).");
         }
     }
 
@@ -185,6 +213,15 @@ public class BancoDados {
         }
         inserirUsuario(user, email, senha, "user");
         return true;
+    }
+
+    /**
+     * Login inteiro numa unica secao critica (protocolo 3.11 e 3.12): confere as credenciais e, se estiverem
+     * certas, verifica a sessao ativa e cria o token. Com dois logins simultaneos, um recebe o token e o outro nao.
+     */
+    public synchronized Login entrar(String email, String senha) throws SQLException {
+        Usuario usuario = autenticar(email, senha);
+        return new Login(usuario, usuario == null ? null : abrirSessao(usuario.id()));
     }
 
     /** Retorna o usuario se email e senha conferem; null caso contrario. */
@@ -374,7 +411,7 @@ public class BancoDados {
      * Retorna o room_id gerado, ou null se ja existir uma sala com o mesmo nome (comparacao exata).
      */
     public synchronized Long criarSala(String name, int capacity, String location, List<String> resources,
-                                       List<Horario> schedule) throws SQLException {
+                                       List<String> slots) throws SQLException {
         if (idSalaPorNome(name) != null) {
             return null;
         }
@@ -391,7 +428,7 @@ public class BancoDados {
             chave.next();
             id = chave.getLong(1);
         }
-        gravarHorarios(id, schedule);
+        gravarSlots(id, slots);
         return id;
     }
 
@@ -422,19 +459,23 @@ public class BancoDados {
             }
             List<String> resources = List.of(Json.GSON.fromJson(rs.getString("resources"), String[].class));
             return new Sala(id, rs.getString("name"), rs.getInt("capacity"), rs.getString("location"),
-                    resources, rs.getString("room_status"), horarios(id));
+                    resources, rs.getString("room_status"), slots(id));
         }
     }
 
     /**
-     * Disponibilidade no list_rooms: false se a sala estiver inactive ou tiver reserva que conflite com o periodo.
+     * Disponibilidade no list_rooms: false se a sala estiver inactive, se alguma aula do periodo nao estiver nos
+     * slots da sala naquele dia da semana (regra 8.4, domingo nunca) ou se houver reserva que conflite com o periodo.
      * Ha conflito quando novo_inicio < fim_existente e novo_fim > inicio_existente; encostar nao conflita (regra 5.4).
      * HH:MM com dois digitos permite comparar os horarios como texto.
      */
-    public synchronized boolean disponivel(Sala sala, String date, String startTime, String endTime) throws SQLException {
-        if (!"active".equals(sala.roomStatus())) {
+    public synchronized boolean disponivel(Sala sala, LocalDate data, String startTime, String endTime)
+            throws SQLException {
+        if (!"active".equals(sala.roomStatus())
+                || !Horarios.dentroDoFuncionamento(sala.slots(), data, startTime, endTime)) {
             return false;
         }
+        String date = data.toString();
         try (PreparedStatement ps = conexao.prepareStatement(
                 "SELECT 1 FROM reservas WHERE sala_id = ? AND date = ? AND start_time < ? AND end_time > ?")) {
             ps.setLong(1, sala.id());
@@ -445,9 +486,27 @@ public class BancoDados {
         }
     }
 
+    /** Reservas da sala na data, em ordem de horario, para a agenda do read_room (protocolo 8.5). */
+    public synchronized List<ReservaDoDia> reservasDoDia(long salaId, String date) throws SQLException {
+        List<ReservaDoDia> reservas = new ArrayList<>();
+        try (PreparedStatement ps = conexao.prepareStatement("""
+                SELECT r.id, r.usuario_id, u.user, r.start_time, r.end_time
+                FROM reservas r JOIN usuarios u ON u.id = r.usuario_id
+                WHERE r.sala_id = ? AND r.date = ? ORDER BY r.start_time, r.id""")) {
+            ps.setLong(1, salaId);
+            ps.setString(2, date);
+            ResultSet rs = ps.executeQuery();
+            while (rs.next()) {
+                reservas.add(new ReservaDoDia(rs.getLong(1), rs.getLong(2), rs.getString(3), rs.getString(4),
+                        rs.getString(5)));
+            }
+        }
+        return reservas;
+    }
+
     /**
      * update_room: aplica so os campos nao nulos. resources sempre vem (lista completa);
-     * schedule null mantem os horarios. Nome de outra sala → NOME_EM_USO; capacidade menor que os
+     * slots null mantem os horarios (regra 8.7), e mudar o funcionamento nao apaga reservas. Nome de outra sala → NOME_EM_USO; capacidade menor que os
      * participants de uma reserva ativa → RESERVAS_ATIVAS.
      */
     public synchronized Resultado atualizarSala(long id, AlteracaoSala alteracao) throws SQLException {
@@ -476,8 +535,8 @@ public class BancoDados {
         atualizarColuna(id, "location", alteracao.location());
         atualizarColuna(id, "resources", alteracao.resources() == null ? null : Json.GSON.toJson(alteracao.resources()));
         atualizarColuna(id, "room_status", alteracao.roomStatus());
-        if (alteracao.schedule() != null) {
-            gravarHorarios(id, alteracao.schedule());
+        if (alteracao.slots() != null) {
+            gravarSlots(id, alteracao.slots());
         }
         return Resultado.OK;
     }
@@ -498,7 +557,7 @@ public class BancoDados {
                 return Resultado.RESERVAS_ATIVAS;
             }
         }
-        for (String sql : List.of("DELETE FROM reservas WHERE sala_id = ?", "DELETE FROM sala_horarios WHERE sala_id = ?",
+        for (String sql : List.of("DELETE FROM reservas WHERE sala_id = ?", "DELETE FROM sala_slots WHERE sala_id = ?",
                 "DELETE FROM salas WHERE id = ?")) {
             try (PreparedStatement ps = conexao.prepareStatement(sql)) {
                 ps.setLong(1, id);
@@ -584,30 +643,30 @@ public class BancoDados {
         }
     }
 
-    private List<Horario> horarios(long salaId) throws SQLException {
-        List<Horario> horarios = new ArrayList<>();
-        try (PreparedStatement ps = conexao.prepareStatement("SELECT day, slot FROM sala_horarios WHERE sala_id = ?")) {
+    /** Slots da sala na ordem da tabela de aulas (dia e depois aula). */
+    private List<String> slots(long salaId) throws SQLException {
+        List<String> slots = new ArrayList<>();
+        try (PreparedStatement ps = conexao.prepareStatement("SELECT slot FROM sala_slots WHERE sala_id = ?")) {
             ps.setLong(1, salaId);
             ResultSet rs = ps.executeQuery();
             while (rs.next()) {
-                horarios.add(new Horario(rs.getString("day"), rs.getString("slot")));
+                slots.add(rs.getString("slot"));
             }
         }
-        horarios.sort(Horarios.ORDEM);
-        return horarios;
+        slots.sort(Horarios.ORDEM);
+        return slots;
     }
 
     /** Substitui os horarios da sala pela lista informada. */
-    private void gravarHorarios(long salaId, List<Horario> schedule) throws SQLException {
-        try (PreparedStatement ps = conexao.prepareStatement("DELETE FROM sala_horarios WHERE sala_id = ?")) {
+    private void gravarSlots(long salaId, List<String> slots) throws SQLException {
+        try (PreparedStatement ps = conexao.prepareStatement("DELETE FROM sala_slots WHERE sala_id = ?")) {
             ps.setLong(1, salaId);
             ps.executeUpdate();
         }
-        try (PreparedStatement ps = conexao.prepareStatement("INSERT INTO sala_horarios (sala_id, day, slot) VALUES (?, ?, ?)")) {
-            for (Horario horario : schedule) {
+        try (PreparedStatement ps = conexao.prepareStatement("INSERT INTO sala_slots (sala_id, slot) VALUES (?, ?)")) {
+            for (String slot : slots) {
                 ps.setLong(1, salaId);
-                ps.setString(2, horario.day());
-                ps.setString(3, horario.slot());
+                ps.setString(2, slot);
                 ps.executeUpdate();
             }
         }

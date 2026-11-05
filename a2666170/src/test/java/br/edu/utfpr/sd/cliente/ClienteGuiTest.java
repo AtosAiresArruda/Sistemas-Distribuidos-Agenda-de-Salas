@@ -7,7 +7,6 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import br.edu.utfpr.sd.comum.ConexaoJson;
-import br.edu.utfpr.sd.comum.Horarios.Horario;
 import br.edu.utfpr.sd.comum.Json;
 import br.edu.utfpr.sd.servidor.BancoDados;
 import br.edu.utfpr.sd.servidor.MonitorServidor;
@@ -61,6 +60,7 @@ import org.junit.jupiter.api.io.TempDir;
 @EnabledIfSystemProperty(named = "gui", matches = "true")
 class ClienteGuiTest {
 
+    // Uma segunda-feira (dia 2 no codigo da UTFPR)
     private static final String FUTURA = "2099-03-02";
 
     @TempDir
@@ -190,37 +190,42 @@ class ClienteGuiTest {
         banco.cadastrar("joao", "joao@email.com", "senha123");
         String token = logar("admin@admin.com", "admin");
 
-        // d) cadastra: nome, capacidade, dias da semana e horarios
+        // d) cadastra: nome, capacidade, dias da semana e horarios (grade da UTFPR, dias x aulas)
         digitar("novaSalaNome", "Sala B12");
         digitar("novaSalaCapacidade", "12");
         digitar("novaSalaLocal", "Bloco B");
         digitar("novaSalaRecursos", "projetor, tv");
         fx(() -> {
-            this.<GradeHorarios>campo("novaSalaHorarios").marcar(
-                    List.of(new Horario("segunda", "M1"), new Horario("quarta", "N5")));
+            this.<GradeHorarios>campo("novaSalaHorarios").marcar(List.of("4N5", "2M1"));
             return null;
         });
         acionar("createRoom");
         assertJson(ultima("create_room"), "op", "create_room", "token", token, "name", "Sala B12", "capacity", "12",
                 "location", "Bloco B");
         assertEquals("[\"projetor\",\"tv\"]", ultima("create_room").get("resources").toString());
-        assertEquals("[{\"day\":\"segunda\",\"slot\":\"M1\"},{\"day\":\"quarta\",\"slot\":\"N5\"}]",
-                ultima("create_room").get("schedule").toString());
+        assertEquals("[\"2M1\",\"4N5\"]", ultima("create_room").get("slots").toString());
         assertEquals("1", this.<TextField>campo("salaAlvo").getText());
         assertEquals(List.of("Sala B12"), coluna("tabelaSalas", "name"));
 
         // e) le: horarios, capacidade, status e quem reservou
-        reservar("joao", 1, FUTURA, "14:00", "16:00");
+        reservar("joao", 1, FUTURA, "07:30", "08:20");
         acionar("readRoom");
         assertJson(ultima("read_room"), "op", "read_room", "token", token, "room_id", "1");
         assertEquals("12", this.<Label>campo("salaLidaCapacidade").getText());
         assertEquals("active (livre)", this.<Label>campo("salaLidaStatus").getText());
-        assertEquals("segunda: M1 | quarta: N5", this.<Label>campo("salaLidaHorarios").getText());
+        assertEquals("Segunda: M1 | Quarta: N5", this.<Label>campo("salaLidaHorarios").getText());
+        // Com a data, a agenda do dia mostra quem reservou cada horario da sala
+        digitar("leituraData", FUTURA);
+        acionar("readRoom");
+        assertJson(ultima("read_room"), "op", "read_room", "token", token, "room_id", "1", "date", FUTURA);
+        assertEquals(List.of("2M1"), coluna("tabelaAgenda", "slot"));
+        assertEquals(List.of("indisponivel"), coluna("tabelaAgenda", "slot_status"));
+        assertEquals(List.of("joao"), coluna("tabelaAgenda", "user"));
         acionar("listReservations");
         assertJson(ultima("list_reservations"), "op", "list_reservations", "token", token, "scope", "all", "room_id", "1");
         assertEquals(List.of("joao"), coluna("tabelaReservas", "user"));
         assertEquals(List.of(FUTURA), coluna("tabelaReservas", "date"));
-        assertEquals(List.of("14:00"), coluna("tabelaReservas", "start_time"));
+        assertEquals(List.of("07:30"), coluna("tabelaReservas", "start_time"));
 
         // f) atualiza: nome, horarios, capacidade e status (o read_room ja preencheu o formulario)
         digitar("editSalaNome", "Sala B13");
@@ -228,18 +233,18 @@ class ClienteGuiTest {
         fx(() -> {
             this.<ComboBox<String>>campo("editSalaStatus").getSelectionModel().select("inactive");
             assertTrue(this.<CheckBox>campo("editSalaEnviarHorarios").isSelected());
-            this.<GradeHorarios>campo("editSalaHorarios").marcar(List.of(new Horario("sabado", "T1")));
+            this.<GradeHorarios>campo("editSalaHorarios").marcar(List.of("7T1"));
             return null;
         });
         acionar("updateRoom");
         assertJson(ultima("update_room"), "op", "update_room", "token", token, "room_id", "1", "name", "Sala B13",
                 "capacity", "20", "location", "Bloco B", "room_status", "inactive");
-        assertEquals("[{\"day\":\"sabado\",\"slot\":\"T1\"}]", ultima("update_room").get("schedule").toString());
+        assertEquals("[\"7T1\"]", ultima("update_room").get("slots").toString());
         BancoDados.Sala sala = banco.buscarSala(1);
         assertEquals("Sala B13", sala.name());
         assertEquals(20, sala.capacity());
         assertEquals("inactive", sala.roomStatus());
-        assertEquals(List.of(new Horario("sabado", "T1")), sala.schedule());
+        assertEquals(List.of("7T1"), sala.slots());
         assertEquals(List.of("inactive"), coluna("tabelaSalas", "room_status"));
 
         // g) remove: com reserva futura o servidor recusa; sem ela, a sala sai dos registros
@@ -292,7 +297,7 @@ class ClienteGuiTest {
         selecionarAba("Salas");
         acionar("listRooms");
         assertEquals("Resposta do servidor nao e um JSON valido.", this.<Label>campo("retornoSalas").getText());
-        // Servidor de colega sem a extensao schedule
+        // Servidor de colega que nao manda o campo slots
         digitar("salaAlvo", "1");
         acionar("readRoom");
         assertEquals("nao informado pelo servidor", this.<Label>campo("salaLidaHorarios").getText());
@@ -411,7 +416,7 @@ class ClienteGuiTest {
             esperadas.add(chaveValor[i]);
             assertEquals(chaveValor[i + 1], req.get(chaveValor[i]).getAsString(), req.toString());
         }
-        chaves.removeAll(List.of("resources", "schedule"));
+        chaves.removeAll(List.of("resources", "slots"));
         assertEquals(esperadas, chaves, req.toString());
         assertEquals("op", req.keySet().iterator().next());
     }

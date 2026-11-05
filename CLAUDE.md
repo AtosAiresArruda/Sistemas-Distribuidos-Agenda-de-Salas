@@ -39,12 +39,12 @@ Regras de consulta:
   - não existe, mas outra conta usa o user `admin` (ex.: banco da EP-1) → essa conta é **apagada** (cadastro, sessões e, quando existirem, reservas) e a conta padrão é criada;
   - nenhuma das duas → cria `admin` / `admin@admin.com` / senha `admin` / role `admin`.
 - **Duas listas de tokens** (`ListasTokens`): usuários comuns e administradores. Todo token é validado por elas; só a lista de admin (whitelist da regra 3.14) libera as operações de admin. As contas ficam numa única tabela `usuarios` com `role`, então o `register` recusa (409) email ou user já usado por um usuário comum ou por um admin.
-- **Horários das salas como flags (EP-2.2, extensão do protocolo).** Campo opcional `schedule: [{"day": "...", "slot": "..."}]` em `create_room`, `update_room`, `read_room` e `list_rooms`. `day` ∈ segunda, terca, quarta, quinta, sexta, sabado; `slot` ∈ M1–M6, T1–T6, N1–N5 (blocos fixos, sem hora em número). No `create_room`, ausente = sala sem horários; no `update_room`, ausente = mantém, presente = substitui a lista inteira. Par inválido ou repetido → 400 "Dados da sala em formato invalido". O cliente aceita resposta sem `schedule` (servidores dos colegas).
+- **Horários das salas (protocolo 2.8.0, seção 8).** O antigo campo `schedule` (extensão do projeto) foi substituído pelo `slots` oficial, no código da UTFPR (`2M1`). Bancos com a tabela antiga `sala_horarios` são convertidos para `sala_slots` ao abrir. O cliente aceita resposta sem `slots` (servidores dos colegas ainda na versão anterior).
 
 ### Pontos que o protocolo não define (decididos com o usuário)
 - `update_room` reduzindo `capacity` abaixo dos `participants` de uma reserva futura → 409 "Sala possui reservas ativas" (pendência 3 do protocolo).
 - `delete_room` apaga junto as reservas **passadas** e os horários da sala; reserva ativa = `date` + `end_time` ainda não passou.
-- `list_rooms` com o trio de filtros: sala `inactive` → `"available": "false"`. O `schedule` não entra no cálculo.
+- `list_rooms` e `read_room`: o `date` também precisa existir no calendário (`2026-02-30` → 400 com a mensagem da operação). Data passada é aceita nas consultas (só a reserva recusa data passada).
 - Token ausente → 401 (pendência 1 do protocolo).
 - **A revisar:** nome de sala "único" com comparação exata ("Sala A" ≠ "sala a"), como está descrito no protocolo.
 
@@ -83,7 +83,7 @@ Condições obrigatórias da avaliação:
 ## Entrega-Parcial-02
 Dividida em duas partes:
 - **EP-2.1 — Administradores.** Status: implementada e commitada (`1a89147`, 2026-11-04). Login, `admin_list_users` e `admin_read_user` conferidos na interface; falta conferir update, delete e os erros.
-- **EP-2.2 — Salas.** Status: implementada (2026-11-04), aguardando teste nas interfaces e commit. Inclui as tabelas `salas`, `sala_horarios` e `reservas` e o `list_reservations` (só leitura); o `create_reservation` fica para a entrega seguinte. No cliente, a aba Salas só aparece para admin (no servidor, `list_rooms` e `read_room` valem para qualquer usuário logado). No `list_rooms`, os filtros só passam pela regex do protocolo; `end_time <= start_time` não é recusado (o protocolo não define).
+- **EP-2.2 — Salas.** Status: implementada (2026-11-04, commit `8f1fa30`); atualizada para o protocolo 2.8.0 em 2026-11-05 (`slots` no código da UTFPR, horários da tabela de aulas e agenda do `read_room`), aguardando teste nas interfaces e commit. Inclui as tabelas `salas`, `sala_slots` e `reservas` e o `list_reservations` (só leitura); `create_reservation`, `check_availability` e as demais operações de reserva ficam para a entrega seguinte (hoje respondem "Operacao desconhecida"), e a validação pela tabela de aulas já está pronta em `comum/Horarios`. No cliente, a aba Salas só aparece para admin (no servidor, `list_rooms` e `read_room` valem para qualquer usuário logado).
 
 Itens avaliados:
 

@@ -48,7 +48,7 @@ class InvasaoAdminTest {
         tokenAdmin = admin.logarAdmin();
         tokenIntruso = intruso.cadastrarELogar("intruso");
         admin.enviar("{\"op\":\"create_room\",\"token\":\"" + tokenAdmin
-                + "\",\"name\":\"Sala A\",\"capacity\":\"10\",\"location\":\"Bloco A\",\"resources\":[]}");
+                + "\",\"name\":\"Sala A\",\"capacity\":\"10\",\"location\":\"Bloco A\",\"resources\":[],\"slots\":[\"2M1\"]}");
     }
 
     @AfterEach
@@ -73,7 +73,7 @@ class InvasaoAdminTest {
         assertResposta(intruso.enviar("{\"op\":\"admin_delete_user\",\"token\":\"" + tokenIntruso
                 + "\",\"target_user\":\"admin\",\"user\":\"admin\"}"), "admin_delete_user_response", "403", PERMISSAO);
         assertResposta(intruso.enviar("{\"op\":\"create_room\",\"token\":\"" + tokenIntruso + "\",\"role\":\"admin\","
-                        + "\"name\":\"Sala X\",\"capacity\":\"5\",\"location\":\"Bloco X\",\"resources\":[]}"),
+                        + "\"name\":\"Sala X\",\"capacity\":\"5\",\"location\":\"Bloco X\",\"resources\":[],\"slots\":[\"2M1\"]}"),
                 "create_room_response", "403", PERMISSAO);
         assertResposta(intruso.enviar("{\"op\":\"update_room\",\"token\":\"" + tokenIntruso + "\",\"role\":\"admin\","
                         + "\"room_id\":\"1\",\"name\":\"\",\"capacity\":\"\",\"location\":\"\",\"resources\":[],\"room_status\":\"inactive\"}"),
@@ -185,7 +185,7 @@ class InvasaoAdminTest {
         admin.comToken("logout", tokenAdmin);
         assertResposta(intruso.comToken("admin_list_users", tokenAdmin), "admin_list_users_response", "401", TOKEN_INVALIDO);
         assertResposta(intruso.enviar("{\"op\":\"create_room\",\"token\":\"" + tokenAdmin + "\",\"name\":\"Sala Z\","
-                + "\"capacity\":\"5\",\"location\":\"Z\",\"resources\":[]}"), "create_room_response", "401", TOKEN_INVALIDO);
+                + "\"capacity\":\"5\",\"location\":\"Z\",\"resources\":[],\"slots\":[\"2M1\"]}"), "create_room_response", "401", TOKEN_INVALIDO);
     }
 
     /** JSON com chave repetida: vale o ultimo valor, e a validacao de token continua valendo. */
@@ -212,7 +212,7 @@ class InvasaoAdminTest {
                     + alvo + "\"}"), "admin_delete_user_response", "400", DADOS);
         }
         assertResposta(admin.enviar("{\"op\":\"create_room\",\"token\":\"" + tokenAdmin + "\",\"name\":\"Sala'); DROP TABLE salas;--\","
-                + "\"capacity\":\"5\",\"location\":\"B\",\"resources\":[]}"), "create_room_response", "400", DADOS_SALA);
+                + "\"capacity\":\"5\",\"location\":\"B\",\"resources\":[],\"slots\":[\"2M1\"]}"), "create_room_response", "400", DADOS_SALA);
         assertResposta(admin.enviar("{\"op\":\"read_room\",\"token\":\"" + tokenAdmin + "\",\"room_id\":\"1 OR 1=1\"}"),
                 "read_room_response", "400", DADOS);
         assertResposta(admin.enviar("{\"op\":\"delete_room\",\"token\":\"" + tokenAdmin + "\",\"room_id\":\"-1\"}"),
@@ -223,7 +223,7 @@ class InvasaoAdminTest {
                 "list_reservations_response", "400", "Filtros em formato invalido");
         // Um recurso com aspas e so texto: gravado e devolvido como veio, sem efeito no banco
         assertResposta(admin.enviar("{\"op\":\"create_room\",\"token\":\"" + tokenAdmin + "\",\"name\":\"Sala Q\","
-                        + "\"capacity\":\"5\",\"location\":\"B\",\"resources\":[\"tv'); DROP TABLE salas;--\"]}"),
+                        + "\"capacity\":\"5\",\"location\":\"B\",\"resources\":[\"tv'); DROP TABLE salas;--\"],\"slots\":[\"2M1\"]}"),
                 "create_room_response", "201", "Sala cadastrada com sucesso");
         assertEquals("[\"tv'); DROP TABLE salas;--\"]", admin.enviar("{\"op\":\"read_room\",\"token\":\"" + tokenAdmin
                 + "\",\"room_id\":\"2\"}").get("resources").toString());

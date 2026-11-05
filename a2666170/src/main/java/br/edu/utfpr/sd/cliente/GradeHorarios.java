@@ -1,7 +1,6 @@
 package br.edu.utfpr.sd.cliente;
 
 import br.edu.utfpr.sd.comum.Horarios;
-import br.edu.utfpr.sd.comum.Horarios.Horario;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
@@ -10,70 +9,71 @@ import java.util.List;
 import javafx.geometry.HPos;
 import javafx.scene.control.CheckBox;
 import javafx.scene.control.Label;
+import javafx.scene.control.Tooltip;
 import javafx.scene.layout.GridPane;
 
 /**
- * Grade de caixas de selecao: uma linha por dia da semana e uma coluna por bloco (M1 ... N5).
- * Gera e le o campo "schedule" das mensagens de sala.
+ * Grade da UTFPR para marcar os horarios da sala: uma linha por dia da semana (segunda a sabado) e uma
+ * coluna por aula (M1 ... N5), com o inicio de cada aula no cabecalho. Gera e le o campo "slots"
+ * no codigo da UTFPR (protocolo, secao 8): a caixa de segunda na coluna M1 vale "2M1".
  */
 public class GradeHorarios extends GridPane {
 
-    private final CheckBox[][] caixas = new CheckBox[Horarios.DIAS.size()][Horarios.SLOTS.size()];
+    private final CheckBox[][] caixas = new CheckBox[Horarios.DIAS.size()][Horarios.AULAS.size()];
 
     public GradeHorarios() {
         setHgap(4);
         setVgap(4);
-        for (int s = 0; s < Horarios.SLOTS.size(); s++) {
-            Label slot = new Label(Horarios.SLOTS.get(s));
-            slot.getStyleClass().add("dica");
-            GridPane.setHalignment(slot, HPos.CENTER);
-            add(slot, s + 1, 0);
+        for (int a = 0; a < Horarios.AULAS.size(); a++) {
+            String aula = Horarios.AULAS.get(a);
+            Label cabecalho = new Label(aula + "\n" + Horarios.INICIOS.get(a));
+            cabecalho.getStyleClass().add("dica");
+            cabecalho.setTooltip(new Tooltip(aula + ": " + Horarios.INICIOS.get(a) + " - " + Horarios.FINS.get(a)));
+            GridPane.setHalignment(cabecalho, HPos.CENTER);
+            add(cabecalho, a + 1, 0);
         }
         for (int d = 0; d < Horarios.DIAS.size(); d++) {
             add(new Label(Horarios.NOMES_DIAS.get(d)), 0, d + 1);
-            for (int s = 0; s < Horarios.SLOTS.size(); s++) {
+            for (int a = 0; a < Horarios.AULAS.size(); a++) {
+                String slot = Horarios.codigo(Horarios.DIAS.get(d), Horarios.AULAS.get(a));
                 CheckBox caixa = new CheckBox();
                 caixa.setMnemonicParsing(false);
+                caixa.setTooltip(new Tooltip(slot + " (" + Horarios.NOMES_DIAS.get(d) + ", "
+                        + Horarios.INICIOS.get(a) + " - " + Horarios.FINS.get(a) + ")"));
                 GridPane.setHalignment(caixa, HPos.CENTER);
-                caixas[d][s] = caixa;
-                add(caixa, s + 1, d + 1);
+                caixas[d][a] = caixa;
+                add(caixa, a + 1, d + 1);
             }
         }
     }
 
-    /** Blocos marcados, em ordem de dia e bloco. */
-    public List<Horario> selecionados() {
-        List<Horario> horarios = new ArrayList<>();
+    /** Horarios marcados no codigo da UTFPR, na ordem da tabela (dia e depois aula). */
+    public List<String> selecionados() {
+        List<String> slots = new ArrayList<>();
         for (int d = 0; d < caixas.length; d++) {
-            for (int s = 0; s < caixas[d].length; s++) {
-                if (caixas[d][s].isSelected()) {
-                    horarios.add(new Horario(Horarios.DIAS.get(d), Horarios.SLOTS.get(s)));
+            for (int a = 0; a < caixas[d].length; a++) {
+                if (caixas[d][a].isSelected()) {
+                    slots.add(Horarios.codigo(Horarios.DIAS.get(d), Horarios.AULAS.get(a)));
                 }
             }
         }
-        return horarios;
+        return slots;
     }
 
-    /** Valor do campo "schedule": [{"day": "...", "slot": "..."}, ...]. */
+    /** Valor do campo "slots": ["2M1", "4T3", ...]. */
     public JsonArray comoJson() {
         JsonArray lista = new JsonArray();
-        for (Horario horario : selecionados()) {
-            JsonObject item = new JsonObject();
-            item.addProperty("day", horario.day());
-            item.addProperty("slot", horario.slot());
-            lista.add(item);
-        }
+        selecionados().forEach(lista::add);
         return lista;
     }
 
-    /** Marca exatamente os horarios informados; itens fora do formato sao ignorados. */
-    public void marcar(List<Horario> horarios) {
+    /** Marca exatamente os horarios informados; codigos fora do formato sao ignorados. */
+    public void marcar(List<String> slots) {
         limpar();
-        for (Horario horario : horarios) {
-            int d = Horarios.DIAS.indexOf(horario.day());
-            int s = Horarios.SLOTS.indexOf(horario.slot());
-            if (d >= 0 && s >= 0) {
-                caixas[d][s].setSelected(true);
+        for (String slot : slots) {
+            if (Horarios.valido(slot)) {
+                caixas[Horarios.DIAS.indexOf(slot.substring(0, 1))][Horarios.AULAS.indexOf(Horarios.aula(slot))]
+                        .setSelected(true);
             }
         }
     }
@@ -86,23 +86,18 @@ public class GradeHorarios extends GridPane {
         }
     }
 
-    /** Le o "schedule" de uma resposta; servidores que nao usam a extensao nao mandam o campo (lista vazia). */
-    public static List<Horario> lerSchedule(JsonObject objeto) {
-        List<Horario> horarios = new ArrayList<>();
-        JsonElement lista = objeto.get("schedule");
+    /** Le os "slots" de uma resposta; tolera servidores que omitam o campo ou mandem itens fora do formato. */
+    public static List<String> lerSlots(JsonObject objeto) {
+        List<String> slots = new ArrayList<>();
+        JsonElement lista = objeto.get("slots");
         if (lista == null || !lista.isJsonArray()) {
-            return horarios;
+            return slots;
         }
         for (JsonElement item : lista.getAsJsonArray()) {
-            if (item.isJsonObject()) {
-                JsonObject o = item.getAsJsonObject();
-                JsonElement day = o.get("day");
-                JsonElement slot = o.get("slot");
-                if (day != null && day.isJsonPrimitive() && slot != null && slot.isJsonPrimitive()) {
-                    horarios.add(new Horario(day.getAsString(), slot.getAsString()));
-                }
+            if (item.isJsonPrimitive()) {
+                slots.add(item.getAsString());
             }
         }
-        return horarios;
+        return slots;
     }
 }
