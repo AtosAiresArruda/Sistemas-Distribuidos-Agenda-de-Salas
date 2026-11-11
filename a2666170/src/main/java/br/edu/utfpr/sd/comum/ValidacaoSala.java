@@ -1,5 +1,7 @@
 package br.edu.utfpr.sd.comum;
 
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
 import java.time.LocalDate;
 import java.time.format.DateTimeParseException;
 import java.util.regex.Pattern;
@@ -14,7 +16,10 @@ public final class ValidacaoSala {
     public static final Pattern NAME = Pattern.compile("^[A-Za-z0-9 -]{1,30}$");
     public static final Pattern CAPACITY = Pattern.compile("^[1-9][0-9]{0,3}$");
     public static final Pattern LOCATION = Pattern.compile("^[A-Za-z0-9 ,.-]{1,60}$");
-    public static final Pattern DATE = Pattern.compile("^[0-9]{4}-[0-9]{2}-[0-9]{2}$");
+    // Dicionario (v2.9): mes 01-12 e dia 01-31; a data tambem precisa existir no calendario
+    public static final Pattern DATE = Pattern.compile("^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$");
+    // Regra 9.7: cada recurso com esta regex e diferente de "0"
+    public static final Pattern RESOURCE = Pattern.compile("^[A-Za-z0-9 -]{1,30}$");
 
     private ValidacaoSala() {
     }
@@ -34,6 +39,18 @@ public final class ValidacaoSala {
     public static String location(String valor) {
         return confere(LOCATION, valor,
                 "Localizacao invalida: de 1 a 60 letras, numeros, espacos, ',', '.' ou '-', sem acentos.");
+    }
+
+    /** Regra 9.7: cada recurso de 1 a 30 letras, numeros, espacos ou '-', e nenhum pode ser "0". */
+    public static String resources(JsonArray recursos) {
+        for (JsonElement item : recursos) {
+            String recurso = item.getAsString();
+            if (!RESOURCE.matcher(recurso).matches() || "0".equals(recurso)) {
+                return "Recurso invalido: '" + recurso + "'. Cada recurso tem de 1 a 30 letras, numeros, espacos ou "
+                        + "'-', sem acentos, e nao pode ser \"0\" (separe os recursos por virgula).";
+            }
+        }
+        return null;
     }
 
     public static String date(String valor) {

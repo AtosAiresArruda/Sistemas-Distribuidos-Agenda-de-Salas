@@ -15,6 +15,8 @@ public final class ValidacaoCadastro {
     public static final Pattern USER = Pattern.compile("^[a-z]{1,30}$");
     public static final Pattern PASSWORD = Pattern.compile("^[A-Za-z0-9]{1,20}$");
     public static final Pattern EMAIL = Pattern.compile("^[a-z0-9._-]+@[a-z0-9-]+(\\.[a-z0-9-]+)*\\.[a-z]{2,}$");
+    // Dicionario (v2.9.1): email com no maximo 100 caracteres
+    public static final int EMAIL_MAXIMO = 100;
 
     private static final String FORMATO_EMAIL =
             "Formato esperado: letras minusculas, numeros, ponto, '_' ou '-' antes do @; depois do @, um dominio "
@@ -28,13 +30,15 @@ public final class ValidacaoCadastro {
     }
 
     public static String email(String email) {
-        if (EMAIL.matcher(email).matches()) {
+        if (email.length() <= EMAIL_MAXIMO && EMAIL.matcher(email).matches()) {
             return null;
         }
         String problema;
         int arroba = email.indexOf('@');
         if (email.isEmpty()) {
             problema = "o email esta vazio";
+        } else if (email.length() > EMAIL_MAXIMO) {
+            problema = "o email tem " + email.length() + " caracteres (maximo " + EMAIL_MAXIMO + ")";
         } else if (!email.equals(email.toLowerCase(Locale.ROOT))) {
             problema = "o email nao aceita letras maiusculas";
         } else if (arroba < 0 || arroba != email.lastIndexOf('@')) {

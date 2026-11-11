@@ -18,7 +18,6 @@ import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Locale;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Pattern;
@@ -34,13 +33,19 @@ public class TratadorCliente extends Thread {
     private static final Pattern USER = Pattern.compile("^[a-z]{1,30}$");
     private static final Pattern PASSWORD = Pattern.compile("^[A-Za-z0-9]{1,20}$");
     private static final Pattern EMAIL = Pattern.compile("^[a-z0-9._-]+@[a-z0-9-]+(\\.[a-z0-9-]+)*\\.[a-z]{2,}$");
+    // Dicionario (v2.9.1): email com no maximo 100 caracteres
+    private static final int EMAIL_MAXIMO = 100;
     private static final Pattern TOKEN = Pattern.compile("^[a-f0-9]{64}$");
 
     private static final Pattern ROOM_ID = Pattern.compile("^[0-9]{1,10}$");
     private static final Pattern NAME = Pattern.compile("^[A-Za-z0-9 -]{1,30}$");
     private static final Pattern CAPACITY = Pattern.compile("^[1-9][0-9]{0,3}$");
     private static final Pattern LOCATION = Pattern.compile("^[A-Za-z0-9 ,.-]{1,60}$");
-    private static final Pattern DATE = Pattern.compile("^[0-9]{4}-[0-9]{2}-[0-9]{2}$");
+    // Regex do dicionario (v2.9): mes 01-12 e dia 01-31; a data tambem precisa existir no calendario (regra 9.2)
+    private static final Pattern DATE = Pattern.compile("^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$");
+    // Regra 9.7: cada recurso segue esta regex e nao pode ser "0" (reservado para apagar todos no update_room)
+    private static final Pattern RESOURCE = Pattern.compile("^[A-Za-z0-9 -]{1,30}$");
+    private static final String APAGAR_RECURSOS = "0";
     // start_time e end_time: inicio e fim de aula da tabela da UTFPR (Horarios.INICIOS e Horarios.FINS)
 
     // Dicionario: valores fixos (case-sensitive)
@@ -51,6 +56,9 @@ public class TratadorCliente extends Thread {
     private static final String DADOS_SALA = "Dados da sala em formato invalido";
     private static final String SALA_NAO_ENCONTRADA = "Sala nao encontrada";
     private static final String RESERVAS_ATIVAS = "Sala possui reservas ativas";
+    private static final String CAPACIDADE_ABAIXO = "Capacidade menor que participantes de reservas ativas";
+    private static final String NADA_PARA_ATUALIZAR = "Nenhum dado para atualizar";
+    private static final String TOKEN_FORMATO = "Token em formato invalido";
 
     private static final String TOKEN_INVALIDO = "Token invalido ou expirado";
     private static final String USUARIO_NAO_ENCONTRADO = "Usuario nao encontrado";
@@ -200,11 +208,11 @@ public class TratadorCliente extends Thread {
 
     private JsonObject register(JsonObject req) throws Exception {
         String formatoInvalido = "Dados de cadastro em formato invalido";
-        // O email e validado como chegou: letra maiuscula nao casa com a regex e responde 400
+        // Regra 2.12 (v2.9): user e email sao validados como chegaram; maiuscula nao casa com a regex e responde 400
         String email = texto(req, "email", formatoInvalido);
-        String user = minusculas(texto(req, "user", formatoInvalido));
+        String user = texto(req, "user", formatoInvalido);
         String password = texto(req, "password", formatoInvalido);
-        if (!confere(EMAIL, email) || !confere(USER, user) || !confere(PASSWORD, password)) {
+        if (!emailValido(email) || !confere(USER, user) || !confere(PASSWORD, password)) {
             throw new Falha("400", formatoInvalido);
         }
 
@@ -216,9 +224,9 @@ public class TratadorCliente extends Thread {
 
     private JsonObject login(JsonObject req) throws Exception {
         String formatoInvalido = "Email ou senha em formato invalido";
-        String email = minusculas(texto(req, "email", formatoInvalido));
+        String email = texto(req, "email", formatoInvalido);
         String password = texto(req, "password", formatoInvalido);
-        if (!confere(EMAIL, email) || !confere(PASSWORD, password)) {
+        if (!emailValido(email) || !confere(PASSWORD, password)) {
             throw new Falha("400", formatoInvalido);
         }
 
@@ -242,7 +250,7 @@ public class TratadorCliente extends Thread {
     }
 
     private JsonObject logout(JsonObject req) throws Exception {
-        String token = token(req, "Token em formato invalido");
+        String token = token(req, TOKEN_FORMATO);
         if (!banco.invalidarToken(token)) {
             throw new Falha("401", TOKEN_INVALIDO);
         }
@@ -251,7 +259,7 @@ public class TratadorCliente extends Thread {
     }
 
     private JsonObject readUser(JsonObject req) throws Exception {
-        Usuario usuario = sessao(token(req, "Token em formato invalido"));
+        Usuario usuario = sessao(token(req, TOKEN_FORMATO));
 
         JsonObject resposta = Json.resposta("read_user_response", "200", "Consulta realizada com sucesso");
         resposta.addProperty("user", usuario.user());
@@ -268,7 +276,7 @@ public class TratadorCliente extends Thread {
             throw new Falha("400", formatoInvalido);
         }
         String token = token(req, formatoInvalido);
-        String user = minusculas(texto(req, "user", formatoInvalido));
+        String user = texto(req, "user", formatoInvalido);
         String password = texto(req, "password", formatoInvalido);
         // String vazia significa "nao alterar"
         if ((!user.isEmpty() && !confere(USER, user)) || (!password.isEmpty() && !confere(PASSWORD, password))) {
@@ -276,7 +284,7 @@ public class TratadorCliente extends Thread {
         }
         // Regra 2.13 (v2.4): os dois campos vazios nao alteram nada
         if (user.isEmpty() && password.isEmpty()) {
-            throw new Falha("400", "Nenhum dado para atualizar");
+            throw new Falha("400", NADA_PARA_ATUALIZAR);
         }
 
         Usuario usuario = sessao(token);
@@ -288,7 +296,8 @@ public class TratadorCliente extends Thread {
 
     private JsonObject deleteUser(JsonObject req) throws Exception {
         String formatoInvalido = "Senha em formato invalido";
-        String token = token(req, formatoInvalido);
+        // Regra 4.2 (v2.9.1): token ausente ou fora do formato tem message propria no delete_user
+        String token = token(req, TOKEN_FORMATO);
         String password = texto(req, "password", formatoInvalido);
         if (!confere(PASSWORD, password)) {
             throw new Falha("400", formatoInvalido);
@@ -307,7 +316,7 @@ public class TratadorCliente extends Thread {
     }
 
     private JsonObject adminListUsers(JsonObject req) throws Exception {
-        sessaoAdmin(token(req, "Token em formato invalido"));
+        sessaoAdmin(token(req, TOKEN_FORMATO));
 
         // A senha nunca e devolvida
         JsonArray lista = new JsonArray();
@@ -327,7 +336,7 @@ public class TratadorCliente extends Thread {
     private JsonObject adminReadUser(JsonObject req) throws Exception {
         String formatoInvalido = "Dados em formato invalido";
         String token = token(req, formatoInvalido);
-        String alvo = minusculas(texto(req, "target_user", formatoInvalido));
+        String alvo = texto(req, "target_user", formatoInvalido);
         if (!confere(USER, alvo)) {
             throw new Falha("400", formatoInvalido);
         }
@@ -352,8 +361,8 @@ public class TratadorCliente extends Thread {
             throw new Falha("400", formatoInvalido);
         }
         String token = token(req, formatoInvalido);
-        String alvo = minusculas(texto(req, "target_user", formatoInvalido));
-        String user = minusculas(texto(req, "user", formatoInvalido));
+        String alvo = texto(req, "target_user", formatoInvalido);
+        String user = texto(req, "user", formatoInvalido);
         String password = texto(req, "password", formatoInvalido);
         String role = texto(req, "role", formatoInvalido);
         // String vazia significa "nao alterar"
@@ -365,7 +374,7 @@ public class TratadorCliente extends Thread {
         }
         // Regra 2.13 (v2.4): os tres campos vazios nao alteram nada
         if (user.isEmpty() && password.isEmpty() && role.isEmpty()) {
-            throw new Falha("400", "Nenhum dado para atualizar");
+            throw new Falha("400", NADA_PARA_ATUALIZAR);
         }
 
         sessaoAdmin(token);
@@ -382,7 +391,7 @@ public class TratadorCliente extends Thread {
     private JsonObject adminDeleteUser(JsonObject req) throws Exception {
         String formatoInvalido = "Dados em formato invalido";
         String token = token(req, formatoInvalido);
-        String alvo = minusculas(texto(req, "target_user", formatoInvalido));
+        String alvo = texto(req, "target_user", formatoInvalido);
         if (!confere(USER, alvo)) {
             throw new Falha("400", formatoInvalido);
         }
@@ -407,7 +416,11 @@ public class TratadorCliente extends Thread {
         String name = texto(req, "name", formatoInvalido);
         String capacity = texto(req, "capacity", formatoInvalido);
         String location = texto(req, "location", formatoInvalido);
+        // resources e obrigatorio no create_room (pode ser []); cada item com a regex e diferente de "0" (regra 9.7)
         List<String> resources = recursos(req, formatoInvalido);
+        if (resources == null) {
+            throw new Falha("400", formatoInvalido);
+        }
         // slots e obrigatorio, com pelo menos um horario e sem repetir (protocolo 8.2)
         List<String> slots = slots(req, formatoInvalido);
         if (slots.isEmpty()) {
@@ -524,8 +537,18 @@ public class TratadorCliente extends Thread {
         String capacity = texto(req, "capacity", formatoInvalido);
         String location = texto(req, "location", formatoInvalido);
         String roomStatus = texto(req, "room_status", formatoInvalido);
-        // resources e sempre a lista completa; slots ausente ou [] mantem os horarios (protocolo 8.7)
-        List<String> resources = recursos(req, formatoInvalido);
+        // Regra 9.7 (v2.9): resources ausente ou [] mantem a lista, ["0"] apaga todos, lista nova substitui.
+        // apagarRecursos vira a lista vazia gravada no banco; null = nao alterar
+        List<String> resources;
+        if (apagarRecursos(req)) {
+            resources = List.of();
+        } else {
+            resources = recursos(req, formatoInvalido);
+            if (resources != null && resources.isEmpty()) {
+                resources = null;
+            }
+        }
+        // slots ausente ou [] mantem os horarios (protocolo 8.7)
         List<String> slots = req.has("slots") ? slots(req, formatoInvalido) : List.of();
         // String vazia significa "nao alterar"
         if (!confere(ROOM_ID, roomId)
@@ -535,16 +558,22 @@ public class TratadorCliente extends Thread {
                 || (!roomStatus.isEmpty() && !ROOM_STATUS.contains(roomStatus))) {
             throw new Falha("400", formatoInvalido);
         }
+        // Regra 2.13 (v2.9): tudo vazio ("" e listas ausentes ou []) nao altera nada; ultimo passo do 400
+        if (name.isEmpty() && capacity.isEmpty() && location.isEmpty() && roomStatus.isEmpty()
+                && resources == null && slots.isEmpty()) {
+            throw new Falha("400", NADA_PARA_ATUALIZAR);
+        }
 
         sessaoAdmin(token);
         BancoDados.AlteracaoSala alteracao = new BancoDados.AlteracaoSala(vazioComoNulo(name),
                 capacity.isEmpty() ? null : Integer.parseInt(capacity), vazioComoNulo(location), resources,
                 vazioComoNulo(roomStatus), slots.isEmpty() ? null : slots);
+        // Ordem da secao 4: 404 -> 409 nome ja cadastrado -> 409 capacidade abaixo de reserva ativa
         switch (banco.atualizarSala(Long.parseLong(roomId), alteracao)) {
             case NAO_ENCONTRADO -> throw new Falha("404", SALA_NAO_ENCONTRADA);
             case NOME_EM_USO -> throw new Falha("409", "Sala ja cadastrada");
-            // Pendencia 3 do protocolo: sem message definida; decidido usar a do catalogo de 409
-            case RESERVAS_ATIVAS -> throw new Falha("409", RESERVAS_ATIVAS);
+            // Regra 9.6 (v2.9): capacity menor que os participants de uma reserva ativa
+            case RESERVAS_ATIVAS -> throw new Falha("409", CAPACIDADE_ABAIXO);
             default -> {
             }
         }
@@ -576,9 +605,12 @@ public class TratadorCliente extends Thread {
         String date = opcional(req, "date", formatoInvalido);
         String roomId = opcional(req, "room_id", formatoInvalido);
         if ((scope != null && !SCOPES.contains(scope))
-                || (date != null && !confere(DATE, date))
                 || (roomId != null && !confere(ROOM_ID, roomId))) {
             throw new Falha("400", formatoInvalido);
+        }
+        // Regra 9.2: a data do filtro tambem precisa existir no calendario (2026-02-30 -> 400)
+        if (date != null) {
+            data(date, formatoInvalido);
         }
 
         Usuario usuario = sessao(token);
@@ -627,20 +659,36 @@ public class TratadorCliente extends Thread {
         return destino;
     }
 
-    /** resources: array obrigatorio (pode ser vazio) cujos itens sao todos strings. */
+    /**
+     * resources: ausente devolve null (quem chama decide: obrigatorio no create_room, "nao alterar" no update_room).
+     * Presente, precisa ser array (null ou outro tipo responde 400) de strings com a regex do dicionario e
+     * diferentes de "0" (regra 9.7).
+     */
     private static List<String> recursos(JsonObject req, String formatoInvalido) throws Falha {
+        if (!req.has("resources")) {
+            return null;
+        }
         JsonElement valor = req.get("resources");
-        if (valor == null || !valor.isJsonArray()) {
+        if (!valor.isJsonArray()) {
             throw new Falha("400", formatoInvalido);
         }
         List<String> recursos = new ArrayList<>();
         for (JsonElement item : valor.getAsJsonArray()) {
-            if (!ehString(item)) {
+            if (!ehString(item) || !confere(RESOURCE, item.getAsString())
+                    || APAGAR_RECURSOS.equals(item.getAsString())) {
                 throw new Falha("400", formatoInvalido);
             }
             recursos.add(item.getAsString());
         }
         return recursos;
+    }
+
+    /** update_room com resources ["0"] (lista so com o item "0"): apaga todos os recursos (regra 9.7). */
+    private static boolean apagarRecursos(JsonObject req) {
+        JsonElement valor = req.get("resources");
+        return valor != null && valor.isJsonArray() && valor.getAsJsonArray().size() == 1
+                && ehString(valor.getAsJsonArray().get(0))
+                && APAGAR_RECURSOS.equals(valor.getAsJsonArray().get(0).getAsString());
     }
 
     /**
@@ -674,13 +722,11 @@ public class TratadorCliente extends Thread {
     }
 
     /**
-     * Le o token da requisicao. Token ausente responde 401 (aba "Codigos de Status");
-     * nulo, de outro tipo ou fora do formato responde 400.
+     * Le o token da requisicao. Regras 2.10 e 4.2 (v2.9/v2.9.1): token ausente, nulo, de outro tipo ou fora do
+     * formato responde 400 com a message de formato da operacao ("Token em formato invalido" nas que a tem).
+     * O 401 fica so para token sem sessao ativa (regra 3.9).
      */
     private static String token(JsonObject req, String formatoInvalido) throws Falha {
-        if (!req.has("token")) {
-            throw new Falha("401", TOKEN_INVALIDO);
-        }
         String token = texto(req, "token", formatoInvalido);
         if (!confere(TOKEN, token)) {
             throw new Falha("400", formatoInvalido);
@@ -738,9 +784,9 @@ public class TratadorCliente extends Thread {
         return formato.matcher(valor).matches();
     }
 
-    // Protocolo 2.12: 'user' e 'email' sao sempre gravados em minusculas
-    private static String minusculas(String valor) {
-        return valor.toLowerCase(Locale.ROOT);
+    /** Email com a regex do dicionario e no maximo 100 caracteres (v2.9.1). */
+    private static boolean emailValido(String email) {
+        return email.length() <= EMAIL_MAXIMO && confere(EMAIL, email);
     }
 
     /** Em atualizacao, "" significa "nao alterar" (protocolo 2.11); o banco recebe null nesse caso. */

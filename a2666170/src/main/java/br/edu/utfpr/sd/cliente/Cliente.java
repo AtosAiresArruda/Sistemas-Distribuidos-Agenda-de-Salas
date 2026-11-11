@@ -271,7 +271,7 @@ public class Cliente {
     private void conectarSeNecessario() throws IOException {
         if (conexao == null) {
             System.out.println("Conectando com " + ip + ":" + porta + "...");
-            conexao = new ConexaoJson(new Socket(ip, porta), "Cliente");
+            conexao = new ConexaoJson(new Socket(ip, porta), "Cliente", false);
         }
     }
 

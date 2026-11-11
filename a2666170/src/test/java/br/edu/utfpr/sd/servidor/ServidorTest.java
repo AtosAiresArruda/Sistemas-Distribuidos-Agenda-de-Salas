@@ -92,7 +92,8 @@ class ServidorTest {
         assertResposta(comToken("logout", token), "logout_response", "200", "Logout realizado com sucesso");
         assertResposta(comToken("logout", token), "logout_response", "401", "Token invalido ou expirado");
         assertResposta(comToken("logout", "abc"), "logout_response", "400", "Token em formato invalido");
-        assertResposta(enviar("{\"op\":\"logout\"}"), "logout_response", "401", "Token invalido ou expirado");
+        // Regra 4.2 (v2.9.1): token ausente -> 400
+        assertResposta(enviar("{\"op\":\"logout\"}"), "logout_response", "400", "Token em formato invalido");
 
         // Depois do logout um novo login e aceito e gera outro token
         JsonObject novoLogin = logar(EMAIL, "senha123");

@@ -258,8 +258,9 @@ class SalasTest {
         assertEquals("16", sala.get("capacity").getAsString());
         assertEquals("active", sala.get("room_status").getAsString());
         assertEquals("[\"3T1\",\"7N5\"]", sala.get("slots").toString());
+        // Regra 2.13 (v2.9): tudo vazio ("" e []) -> 400 "Nenhum dado para atualizar"
         assertResposta(atualizar(tokenAdmin, "1", "", "", "", "[]", "", "[]"),
-                "update_room_response", "200", "Sala atualizada com sucesso");
+                "update_room_response", "400", "Nenhum dado para atualizar");
         assertEquals("[\"3T1\",\"7N5\"]", ler(tokenAdmin, "1").get("slots").toString());
         for (String invalido : new String[] {"null", "\"2M1\"", "[\"2M7\"]", "[\"2M1\",\"2M1\"]", "[{\"day\":\"sabado\",\"slot\":\"N5\"}]"}) {
             assertResposta(atualizar(tokenAdmin, "1", "", "", "", "[]", "", invalido), "update_room_response", "400", DADOS_SALA);
@@ -275,8 +276,9 @@ class SalasTest {
         assertResposta(atualizar(tokenAdmin, "1", "", "", "", "[]", "Active", null), "update_room_response", "400", DADOS_SALA);
         assertResposta(atualizar(tokenAdmin, "x", "", "", "", "[]", "", null), "update_room_response", "400", DADOS_SALA);
         assertResposta(atualizar(tokenAdmin, "1", "", "0", "", "[]", "", null), "update_room_response", "400", DADOS_SALA);
+        // v2.9.1: resources pode ser omitido; sem nada para mudar -> "Nenhum dado para atualizar"
         assertResposta(enviar("{\"op\":\"update_room\",\"token\":\"" + tokenAdmin + "\",\"room_id\":\"1\",\"name\":\"\","
-                + "\"capacity\":\"\",\"location\":\"\",\"room_status\":\"\"}"), "update_room_response", "400", DADOS_SALA);
+                + "\"capacity\":\"\",\"location\":\"\",\"room_status\":\"\"}"), "update_room_response", "400", "Nenhum dado para atualizar");
         assertResposta(enviar("{\"op\":\"update_room\",\"token\":\"" + tokenAdmin + "\",\"room_id\":\"1\",\"name\":\"\","
                 + "\"capacity\":\"\",\"location\":\"\",\"resources\":[]}"), "update_room_response", "400", DADOS_SALA);
         assertResposta(atualizar(tokenJoao, "1", "", "5", "", "[]", "", null), "update_room_response", "403", PERMISSAO);
@@ -287,7 +289,7 @@ class SalasTest {
                 "update_room_response", "200", "Sala atualizada com sucesso");
         reservar("joao", 1, FUTURA, "07:30", "09:10", 10);
         assertResposta(atualizar(tokenAdmin, "1", "", "8", "", "[]", "", null),
-                "update_room_response", "409", "Sala possui reservas ativas");
+                "update_room_response", "409", "Capacidade menor que participantes de reservas ativas");
         assertResposta(atualizar(tokenAdmin, "1", "", "10", "", "[]", "", null),
                 "update_room_response", "200", "Sala atualizada com sucesso");
         // Mudar o funcionamento nao apaga as reservas ja feitas (regra 8.7)

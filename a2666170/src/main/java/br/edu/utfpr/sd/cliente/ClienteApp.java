@@ -15,8 +15,10 @@ import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.net.UnknownHostException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
+import java.util.Objects;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.function.Consumer;
@@ -166,6 +168,8 @@ public class ClienteApp extends Application {
     private final TextField editSalaCapacidade = new TextField();
     private final TextField editSalaLocal = new TextField();
     private final TextField editSalaRecursos = new TextField();
+    // Regra 9.7 (v2.9): resources [] mantem a lista e ["0"] apaga todos os recursos
+    private final CheckBox editSalaApagarRecursos = new CheckBox("Apagar todos os recursos (envia resources [\"0\"])");
     private final ComboBox<String> editSalaStatus =
             new ComboBox<>(FXCollections.observableArrayList(NAO_ALTERAR, "active", "inactive"));
     private final CheckBox editSalaEnviarHorarios = new CheckBox("Substituir os horarios (envia slots)");
@@ -180,9 +184,9 @@ public class ClienteApp extends Application {
     @Override
     public void start(Stage palco) {
         abaLogin = new Tab("Login", rolavel(conteudoLogin()));
-        abaConta = new Tab("Minha conta", rolavel(conteudoConta()));
-        abaAdmin = new Tab("Administracao", rolavel(conteudoAdmin()));
-        abaSalas = new Tab("Salas", rolavel(conteudoSalas()));
+        abaConta = new Tab("Minha conta", comRetornoFixo(retornoConta, conteudoConta()));
+        abaAdmin = new Tab("Administracao", comRetornoFixo(retornoAdmin, conteudoAdmin()));
+        abaSalas = new Tab("Salas", comRetornoFixo(retornoSalas, conteudoSalas()));
         abas.getTabs().addAll(abaLogin, abaConta);
         abas.setTabClosingPolicy(TabPane.TabClosingPolicy.UNAVAILABLE);
         abaConta.disableProperty().bind(logado.not());
@@ -307,7 +311,7 @@ public class ClienteApp extends Application {
         VBox cartaoLogout = cartao("Sessao", "Envia logout: o servidor invalida o token.",
                 botao("Sair (logout)", this::logout));
 
-        VBox conteudo = new VBox(12, retornoConta, cartaoLeitura, cartaoUpdate, cartaoDelete, cartaoLogout);
+        VBox conteudo = new VBox(12, cartaoLeitura, cartaoUpdate, cartaoDelete, cartaoLogout);
         conteudo.setPadding(new Insets(12));
         return conteudo;
     }
@@ -366,7 +370,7 @@ public class ClienteApp extends Application {
         VBox cartaoDelete = cartao("Excluir usuario",
                 "Envia admin_delete_user: apaga o cadastro do alvo e encerra a sessao dele.", excluir);
 
-        VBox conteudo = new VBox(12, retornoAdmin, cartaoLista, cartaoAlvo, cartaoLeitura, cartaoUpdate, cartaoDelete);
+        VBox conteudo = new VBox(12, cartaoLista, cartaoAlvo, cartaoLeitura, cartaoUpdate, cartaoDelete);
         conteudo.setPadding(new Insets(12));
         return conteudo;
     }
@@ -454,7 +458,8 @@ public class ClienteApp extends Application {
         editSalaNome.setPromptText("em branco = nao alterar");
         editSalaCapacidade.setPromptText("em branco = nao alterar");
         editSalaLocal.setPromptText("em branco = nao alterar");
-        editSalaRecursos.setPromptText("lista completa, separada por virgula");
+        editSalaRecursos.setPromptText("lista completa, separada por virgula (em branco = nao alterar)");
+        editSalaRecursos.disableProperty().bind(editSalaApagarRecursos.selectedProperty());
         editSalaStatus.getSelectionModel().select(NAO_ALTERAR);
         editSalaStatus.setMaxWidth(Double.MAX_VALUE);
         GridPane formAtualizar = formulario(
@@ -464,7 +469,9 @@ public class ClienteApp extends Application {
                 "Recursos", editSalaRecursos,
                 "Status", editSalaStatus);
         Label dicaAtualizar = new Label("Campos em branco e \"" + NAO_ALTERAR + "\" vao como \"\" e nao sao alterados. "
-                + "Status: active = livre, inactive = indisponivel. Recursos sempre substituem a lista inteira. "
+                + "Status: active = livre, inactive = indisponivel. Recursos: a lista digitada substitui a lista "
+                + "inteira; em branco vai como [] e mantem os atuais; para tirar todos, marque \"Apagar todos os "
+                + "recursos\" (envia [\"0\"]). "
                 + "Horarios: com a caixa marcada, a grade substitui todos os horarios da sala (reservas ja feitas "
                 + "continuam); desmarcada, os horarios atuais sao mantidos. Use \"Ler sala\" antes para trazer os "
                 + "valores atuais.");
@@ -472,7 +479,7 @@ public class ClienteApp extends Application {
         dicaAtualizar.setWrapText(true);
         editSalaHorarios.disableProperty().bind(editSalaEnviarHorarios.selectedProperty().not());
         VBox cartaoAtualizar = cartao("Atualizar sala", "Envia update_room para a sala alvo.",
-                formAtualizar, dicaAtualizar, editSalaEnviarHorarios, editSalaHorarios,
+                formAtualizar, editSalaApagarRecursos, dicaAtualizar, editSalaEnviarHorarios, editSalaHorarios,
                 botao("Atualizar sala alvo (update_room)", this::updateRoom));
 
         Button excluir = botao("Excluir sala alvo (delete_room)", this::deleteRoom);
@@ -493,7 +500,7 @@ public class ClienteApp extends Application {
                 formulario("Data", agendaData), botao("Listar reservas (list_reservations)", this::listReservations),
                 contagemReservas, tabelaReservas);
 
-        VBox conteudo = new VBox(12, retornoSalas, cartaoLista, cartaoAlvo, cartaoLeitura, cartaoCriar,
+        VBox conteudo = new VBox(12, cartaoLista, cartaoAlvo, cartaoLeitura, cartaoCriar,
                 cartaoAtualizar, cartaoExcluir, cartaoAgenda);
         conteudo.setPadding(new Insets(12));
         return conteudo;
@@ -514,7 +521,7 @@ public class ClienteApp extends Application {
     // ------------------------------------------------------------------ operacoes
 
     private void register() {
-        // O servidor grava user e email em minusculas (protocolo 2.12)
+        // Regra 2.12 (v2.9): o servidor recusa maiusculas em user e email; o cliente pode converter antes de enviar
         String email = cadastroEmail.getText().toLowerCase(Locale.ROOT);
         String user = cadastroUsuario.getText().toLowerCase(Locale.ROOT);
         String password = cadastroSenha.getText();
@@ -541,7 +548,8 @@ public class ClienteApp extends Application {
 
     private void login() {
         JsonObject req = requisicao("login");
-        req.addProperty("email", loginEmail.getText());
+        // Regra 2.12: email so em minusculas; o cliente converte antes de enviar, como no cadastro
+        req.addProperty("email", loginEmail.getText().toLowerCase(Locale.ROOT));
         req.addProperty("password", loginSenha.getText());
         String servidor = enderecoInformado();
         enviar(req, retornoLogin, resp -> {
@@ -631,7 +639,12 @@ public class ClienteApp extends Application {
     }
 
     private void adminListUsers() {
-        enviar(requisicaoComToken("admin_list_users"), retornoAdmin, resp -> {
+        adminListUsers(false);
+    }
+
+    /** @param recarga listagem automatica depois de outra operacao: so mostra mensagem se der erro */
+    private void adminListUsers(boolean recarga) {
+        enviar(requisicaoComToken("admin_list_users"), retornoAdmin, recarga, resp -> {
             if (sucesso(resp)) {
                 List<JsonObject> usuarios = new ArrayList<>();
                 JsonElement lista = resp.get("users");
@@ -707,7 +720,7 @@ public class ClienteApp extends Application {
                     }
                 }
                 if (ehAdmin()) {
-                    adminListUsers();
+                    adminListUsers(true);
                 }
             }
             recarregarSeNaoEncontrado(resp);
@@ -736,23 +749,33 @@ public class ClienteApp extends Application {
                 }
                 alvo.clear();
                 limparLeituraAdmin();
-                adminListUsers();
+                adminListUsers(true);
             }
             recarregarSeNaoEncontrado(resp);
         });
     }
 
     private void listRooms() {
+        listRooms(false);
+    }
+
+    /**
+     * @param recarga listagem automatica depois de outra operacao: so mostra mensagem se der erro, para nao
+     *                esconder o retorno da operacao (ex.: "201 - Sala cadastrada com sucesso"); com filtros
+     *                invalidos, a recarga nao e enviada
+     */
+    private void listRooms(boolean recarga) {
         String date = filtroData.getText().trim();
         String inicio = valorOuVazio(filtroInicio);
         String fim = valorOuVazio(filtroFim);
         String minCapacity = filtroCapacidade.getText().trim();
         int trio = (date.isEmpty() ? 0 : 1) + (inicio.isEmpty() ? 0 : 1) + (fim.isEmpty() ? 0 : 1);
-        if (!dadosValidos(retornoSalas,
+        String[] problemas = {
                 trio == 1 || trio == 2 ? "Informe data, inicio e fim juntos, ou deixe os tres em branco." : null,
                 date.isEmpty() ? null : ValidacaoSala.date(date),
                 trio == 3 ? ValidacaoSala.periodo(inicio, fim) : null,
-                minCapacity.isEmpty() ? null : ValidacaoSala.minCapacity(minCapacity))) {
+                minCapacity.isEmpty() ? null : ValidacaoSala.minCapacity(minCapacity)};
+        if (recarga ? Arrays.stream(problemas).anyMatch(Objects::nonNull) : !dadosValidos(retornoSalas, problemas)) {
             return;
         }
 
@@ -761,7 +784,7 @@ public class ClienteApp extends Application {
         adicionarSePreenchido(req, "start_time", inicio);
         adicionarSePreenchido(req, "end_time", fim);
         adicionarSePreenchido(req, "min_capacity", minCapacity);
-        enviar(req, retornoSalas, resp -> {
+        enviar(req, retornoSalas, recarga, resp -> {
             if (sucesso(resp)) {
                 tabelaSalas.setItems(FXCollections.observableArrayList(objetos(resp, "rooms")));
                 contagemSalas.setText("count: " + texto(resp, "count") + " sala(s)");
@@ -805,6 +828,7 @@ public class ClienteApp extends Application {
                 editSalaCapacidade.setText(texto(resp, "capacity"));
                 editSalaLocal.setText(texto(resp, "location"));
                 editSalaRecursos.setText(String.join(", ", recursos(resp)));
+                editSalaApagarRecursos.setSelected(false);
                 editSalaStatus.getSelectionModel().select(NAO_ALTERAR);
                 editSalaHorarios.marcar(slots);
                 editSalaEnviarHorarios.setSelected(!slots.isEmpty());
@@ -819,7 +843,8 @@ public class ClienteApp extends Application {
         String location = novaSalaLocal.getText();
         // Protocolo 8.2: slots e obrigatorio, com pelo menos um horario
         if (!dadosValidos(retornoSalas, ValidacaoSala.name(name), ValidacaoSala.capacity(capacity),
-                ValidacaoSala.location(location), novaSalaHorarios.selecionados().isEmpty()
+                ValidacaoSala.location(location), ValidacaoSala.resources(listaRecursos(novaSalaRecursos.getText())),
+                novaSalaHorarios.selecionados().isEmpty()
                         ? "Horarios: marque na grade pelo menos um horario em que a sala funciona." : null)) {
             return;
         }
@@ -839,7 +864,7 @@ public class ClienteApp extends Application {
                 novaSalaLocal.clear();
                 novaSalaRecursos.clear();
                 novaSalaHorarios.limpar();
-                listRooms();
+                listRooms(true);
             }
         });
     }
@@ -857,9 +882,16 @@ public class ClienteApp extends Application {
         // Campo vazio significa "nao alterar", entao so os preenchidos sao conferidos. Os horarios nao tem
         // como ser esvaziados: slots [] significa "nao alterar" (protocolo 8.7)
         boolean enviarSlots = editSalaEnviarHorarios.isSelected();
+        // Regra 9.7: ["0"] apaga todos os recursos; senao a lista digitada ([] = nao alterar)
+        boolean apagarRecursos = editSalaApagarRecursos.isSelected();
+        JsonArray recursos = apagarRecursos ? new JsonArray() : listaRecursos(editSalaRecursos.getText());
+        if (apagarRecursos) {
+            recursos.add("0");
+        }
         if (!dadosValidos(retornoSalas, name.isEmpty() ? null : ValidacaoSala.name(name),
                 capacity.isEmpty() ? null : ValidacaoSala.capacity(capacity),
                 location.isEmpty() ? null : ValidacaoSala.location(location),
+                apagarRecursos ? null : ValidacaoSala.resources(recursos),
                 enviarSlots && editSalaHorarios.selecionados().isEmpty()
                         ? "Horarios: marque pelo menos um horario, ou desmarque a caixa para manter os atuais." : null)) {
             return;
@@ -870,7 +902,7 @@ public class ClienteApp extends Application {
         req.addProperty("name", name);
         req.addProperty("capacity", capacity);
         req.addProperty("location", location);
-        req.add("resources", listaRecursos(editSalaRecursos.getText()));
+        req.add("resources", recursos);
         req.addProperty("room_status", roomStatus);
         // Sem a caixa marcada a chave nao e enviada e o servidor mantem os horarios
         if (enviarSlots) {
@@ -879,7 +911,12 @@ public class ClienteApp extends Application {
         enviar(req, retornoSalas, resp -> {
             if (sucesso(resp)) {
                 limparLeituraSala();
-                listRooms();
+                // A sala ficou sem recursos: o campo acompanha (em branco = [] = manter, na proxima atualizacao)
+                if (apagarRecursos) {
+                    editSalaRecursos.clear();
+                }
+                editSalaApagarRecursos.setSelected(false);
+                listRooms(true);
             }
             recarregarSalasSeNaoEncontrada(resp);
         });
@@ -902,7 +939,7 @@ public class ClienteApp extends Application {
             if (sucesso(resp)) {
                 salaAlvo.clear();
                 limparLeituraSala();
-                listRooms();
+                listRooms(true);
             }
             recarregarSalasSeNaoEncontrada(resp);
         });
@@ -931,7 +968,7 @@ public class ClienteApp extends Application {
 
     private void recarregarSalasSeNaoEncontrada(JsonObject resp) {
         if ("404".equals(texto(resp, "status")) && ehAdmin()) {
-            listRooms();
+            listRooms(true);
         }
     }
 
@@ -1009,7 +1046,7 @@ public class ClienteApp extends Application {
     /** Aba "Codigos de Status": no 404 o cliente informa e recarrega a listagem. */
     private void recarregarSeNaoEncontrado(JsonObject resp) {
         if ("404".equals(texto(resp, "status")) && ehAdmin()) {
-            adminListUsers();
+            adminListUsers(true);
         }
     }
 
@@ -1044,11 +1081,18 @@ public class ClienteApp extends Application {
 
     /** Envia a requisicao na thread de rede e trata a resposta na thread da interface. */
     private void enviar(JsonObject requisicao, Label retorno, Consumer<JsonObject> aoResponder) {
+        enviar(requisicao, retorno, false, aoResponder);
+    }
+
+    /** @param recarga listagem automatica: a resposta so aparece no retorno se nao for sucesso */
+    private void enviar(JsonObject requisicao, Label retorno, boolean recarga, Consumer<JsonObject> aoResponder) {
         executar(() -> trocar(c -> c.enviar(requisicao)), resp -> {
             if (resp == null) {
                 return;
             }
-            mostrarResposta(retorno, resp);
+            if (!recarga || !sucesso(resp)) {
+                mostrarResposta(retorno, resp);
+            }
             aoResponder.accept(resp);
             tratarStatusGeral(resp);
         });
@@ -1138,7 +1182,7 @@ public class ClienteApp extends Application {
         System.out.println("Conectando com " + ip + ":" + porta + "...");
         Socket socket = new Socket();
         socket.connect(new InetSocketAddress(ip, porta), 5000);
-        conexao = new ConexaoJson(socket, "Cliente");
+        conexao = new ConexaoJson(socket, "Cliente", false);
         conexao.setOuvinte((direcao, texto) -> Platform.runLater(() -> painelJson.mensagem("", direcao, texto)));
         String endereco = ip + ":" + porta;
         Platform.runLater(() -> {
@@ -1431,6 +1475,17 @@ public class ClienteApp extends Application {
         coluna.setPrefWidth(largura);
         coluna.setCellValueFactory(c -> new SimpleStringProperty(valor.apply(c.getValue())));
         return coluna;
+    }
+
+    /**
+     * Aba rolavel com a mensagem de retorno fixa no topo: fica visivel mesmo com a aba rolada ate o fim
+     * (ex.: o aviso de dados invalidos do cartao "Cadastrar sala", que fica no fim da aba Salas).
+     */
+    private static VBox comRetornoFixo(Label retorno, Node conteudo) {
+        ScrollPane rolagem = rolavel(conteudo);
+        VBox.setVgrow(rolagem, Priority.ALWAYS);
+        VBox.setMargin(retorno, new Insets(8, 12, 4, 12));
+        return new VBox(retorno, rolagem);
     }
 
     private static ScrollPane rolavel(Node conteudo) {

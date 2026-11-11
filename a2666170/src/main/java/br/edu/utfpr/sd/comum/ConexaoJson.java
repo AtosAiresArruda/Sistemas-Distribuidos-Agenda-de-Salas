@@ -12,7 +12,8 @@ import java.nio.charset.StandardCharsets;
 
 /**
  * Troca de mensagens JSON sobre um socket TCP, seguindo o protocolo:
- * UTF-8, uma mensagem por linha terminada em '\n' e no maximo 8192 bytes (incluindo o '\n').
+ * UTF-8, uma mensagem por linha terminada em '\n'. Regra 1.6 (v2.9.1): requisicoes tem no maximo 8192 bytes
+ * (incluindo o '\n'); respostas nao tem limite. O servidor le com o limite e o cliente sem limite.
  * Toda mensagem enviada e recebida e exibida no console.
  */
 public class ConexaoJson implements Closeable {
@@ -39,10 +40,21 @@ public class ConexaoJson implements Closeable {
     private final OutputStream out;
     private final String lado;
     private final String remoto;
+    private final boolean limitarRecepcao;
     private volatile Ouvinte ouvinte;
 
-    /** @param lado "Servidor" ou "Cliente", usado nos logs */
+    /** Conexao que recebe requisicoes (servidor): mensagens acima de 8192 bytes sao descartadas. */
     public ConexaoJson(Socket socket, String lado) throws IOException {
+        this(socket, lado, true);
+    }
+
+    /**
+     * @param lado            "Servidor" ou "Cliente", usado nos logs
+     * @param limitarRecepcao true para aplicar o limite de 8192 bytes ao receber (servidor); false para ler
+     *                        respostas de qualquer tamanho (cliente, regra 1.6 v2.9.1)
+     */
+    public ConexaoJson(Socket socket, String lado, boolean limitarRecepcao) throws IOException {
+        this.limitarRecepcao = limitarRecepcao;
         this.socket = socket;
         this.in = new BufferedInputStream(socket.getInputStream());
         this.out = socket.getOutputStream();
@@ -86,7 +98,7 @@ public class ConexaoJson implements Closeable {
                 break;
             }
             // Com mais este byte e o '\n' final, a mensagem passaria do limite
-            if (lidos >= TAMANHO_MAXIMO) {
+            if (limitarRecepcao && lidos >= TAMANHO_MAXIMO) {
                 excedeu = true;
             }
             if (!excedeu) {

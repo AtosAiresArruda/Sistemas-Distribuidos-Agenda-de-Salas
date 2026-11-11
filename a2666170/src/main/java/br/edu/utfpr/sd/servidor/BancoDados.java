@@ -505,9 +505,10 @@ public class BancoDados {
     }
 
     /**
-     * update_room: aplica so os campos nao nulos. resources sempre vem (lista completa);
-     * slots null mantem os horarios (regra 8.7), e mudar o funcionamento nao apaga reservas. Nome de outra sala → NOME_EM_USO; capacidade menor que os
-     * participants de uma reserva ativa → RESERVAS_ATIVAS.
+     * update_room: aplica so os campos nao nulos. resources null mantem a lista e a lista vazia apaga todos
+     * (["0"] na requisicao, regra 9.7); slots null mantem os horarios (regra 8.7), e mudar o funcionamento nao apaga
+     * reservas. Nome de outra sala → NOME_EM_USO; capacidade menor que os participants de uma reserva ativa →
+     * RESERVAS_ATIVAS (respondido como 409 "Capacidade menor que participantes de reservas ativas", regra 9.6).
      */
     public synchronized Resultado atualizarSala(long id, AlteracaoSala alteracao) throws SQLException {
         if (buscarSala(id) == null) {

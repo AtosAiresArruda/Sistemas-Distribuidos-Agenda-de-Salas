@@ -48,6 +48,7 @@ import javafx.scene.control.TableView;
 import javafx.scene.control.TextField;
 import javafx.scene.control.Tooltip;
 import javafx.scene.layout.BorderPane;
+import javafx.scene.layout.FlowPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.Region;
@@ -150,7 +151,11 @@ public class ServidorApp extends Application {
 
     // ------------------------------------------------------------------ layout
 
-    private HBox barraTopo() {
+    /**
+     * Barra superior responsiva: os grupos (IP, porta, botoes, estado e contadores) nunca encolhem com "...";
+     * quando a janela fica estreita (ex.: meia tela, 900 px), os que nao cabem descem para a linha de baixo.
+     */
+    private FlowPane barraTopo() {
         // IP desta maquina, para informar aos colegas que vao conectar
         List<String[]> ips = meusIps();
         Label ip = new Label("IP: " + (ips.isEmpty() ? "sem rede"
@@ -171,15 +176,21 @@ public class ServidorApp extends Application {
         botaoParar.setDisable(true);
         indicador.getStyleClass().add("indicador");
 
-        Region espaco = new Region();
-        HBox.setHgrow(espaco, Priority.ALWAYS);
-
-        HBox barra = new HBox(ip, rotulo, campoPorta, botaoIniciar, botaoParar, indicador, espaco,
-                metrica(threadsAtivas, "threads ativas"),
+        HBox porta = new HBox(6, rotulo, campoPorta);
+        porta.setAlignment(Pos.CENTER_LEFT);
+        HBox botoes = new HBox(6, botaoIniciar, botaoParar);
+        HBox metricas = new HBox(metrica(threadsAtivas, "threads ativas"),
                 metrica(totalConexoes, "conexoes desde o inicio"),
                 metrica(totalMensagens, "mensagens JSON"));
+
+        FlowPane barra = new FlowPane(10, 6, ip, porta, botoes, indicador, metricas);
+        barra.setAlignment(Pos.CENTER_LEFT);
+        barra.setRowValignment(javafx.geometry.VPos.CENTER);
+        for (Region item : new Region[] {ip, rotulo, campoPorta, botaoIniciar, botaoParar, indicador, porta, botoes,
+                metricas}) {
+            item.setMinWidth(Region.USE_PREF_SIZE);
+        }
         barra.getStyleClass().add("barra-topo");
-        barra.setSpacing(10);
         return barra;
     }
 
@@ -207,7 +218,9 @@ public class ServidorApp extends Application {
         numero.getStyleClass().add("metrica");
         Label legenda = new Label(rotulo);
         legenda.getStyleClass().add("metrica-rotulo");
+        legenda.setMinWidth(Region.USE_PREF_SIZE);
         VBox caixa = new VBox(numero, legenda);
+        caixa.setMinWidth(Region.USE_PREF_SIZE);
         caixa.setAlignment(Pos.CENTER);
         caixa.setPadding(new Insets(0, 10, 0, 10));
         return caixa;
@@ -241,7 +254,8 @@ public class ServidorApp extends Application {
         tabela.getColumns().add(coluna("Status", 60, i -> i.ultimoStatus));
         tabela.getColumns().add(coluna("Msgs", 50, i -> i.mensagens.asString()));
         tabela.getColumns().add(coluna("Desde", 70, i -> new SimpleStringProperty(i.inicio)));
-        tabela.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_FLEX_LAST_COLUMN);
+        // Colunas com largura propria: se a janela estreitar (meia tela), aparece a rolagem horizontal
+        tabela.setColumnResizePolicy(TableView.UNCONSTRAINED_RESIZE_POLICY);
         tabela.setRowFactory(t -> new TableRow<>() {
             @Override
             protected void updateItem(InfoThread info, boolean vazia) {
@@ -282,6 +296,9 @@ public class ServidorApp extends Application {
                                                           Function<InfoThread, ObservableValue<String>> valor) {
         TableColumn<InfoThread, String> coluna = new TableColumn<>(titulo);
         coluna.setPrefWidth(largura);
+        // Coluna nao encolhe abaixo da largura pensada para ela: em janela estreita a tabela ganha rolagem
+        // horizontal em vez de cortar os titulos ("Thr", "Esta", "St")
+        coluna.setMinWidth(largura);
         coluna.setCellValueFactory(c -> valor.apply(c.getValue()));
         return coluna;
     }
@@ -353,7 +370,8 @@ public class ServidorApp extends Application {
         TableColumn<BancoDados.Sessao, String> token = new TableColumn<>("token");
         token.setCellValueFactory(c -> new SimpleStringProperty(c.getValue().token()));
         tabela.getColumns().addAll(List.of(user, email, token));
-        tabela.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_FLEX_LAST_COLUMN);
+        // Colunas com largura propria: se a janela estreitar (meia tela), aparece a rolagem horizontal
+        tabela.setColumnResizePolicy(TableView.UNCONSTRAINED_RESIZE_POLICY);
         VBox.setVgrow(tabela, Priority.ALWAYS);
 
         VBox painel = new VBox(6, titulo, tabela);

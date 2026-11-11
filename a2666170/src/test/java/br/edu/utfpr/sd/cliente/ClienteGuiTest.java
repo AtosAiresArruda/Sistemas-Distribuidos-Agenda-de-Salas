@@ -37,6 +37,7 @@ import javafx.scene.control.CheckBox;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.DialogPane;
 import javafx.scene.control.Label;
+import javafx.scene.control.ScrollPane;
 import javafx.scene.control.Tab;
 import javafx.scene.control.TabPane;
 import javafx.scene.control.TableView;
@@ -246,6 +247,29 @@ class ClienteGuiTest {
         assertEquals("inactive", sala.roomStatus());
         assertEquals(List.of("7T1"), sala.slots());
         assertEquals(List.of("inactive"), coluna("tabelaSalas", "room_status"));
+        // O formulario veio preenchido pelo read_room: a lista atual de recursos vai inteira
+        assertEquals("[\"projetor\",\"tv\"]", ultima("update_room").get("resources").toString());
+
+        // Regra 9.7 (v2.9): "Apagar todos os recursos" envia ["0"]; recursos em branco vao como [] (manter)
+        digitar("editSalaNome", "");
+        digitar("editSalaCapacidade", "");
+        fx(() -> {
+            this.<CheckBox>campo("editSalaEnviarHorarios").setSelected(false);
+            this.<ComboBox<String>>campo("editSalaStatus").getSelectionModel().select(0);
+            this.<CheckBox>campo("editSalaApagarRecursos").setSelected(true);
+            return null;
+        });
+        acionar("updateRoom");
+        assertEquals("[\"0\"]", ultima("update_room").get("resources").toString());
+        assertFalse(ultima("update_room").has("slots"));
+        assertEquals(List.of(), banco.buscarSala(1).resources());
+        assertEquals(List.of("7T1"), banco.buscarSala(1).slots());
+        assertEquals("200 - Sala atualizada com sucesso", this.<Label>campo("retornoSalas").getText());
+        // Tudo em branco: o servidor responde 400 "Nenhum dado para atualizar" (regra 2.13) e o cliente mostra
+        digitar("editSalaLocal", "");
+        acionar("updateRoom");
+        assertEquals("[]", ultima("update_room").get("resources").toString());
+        assertEquals("400 - Nenhum dado para atualizar", this.<Label>campo("retornoSalas").getText());
 
         // g) remove: com reserva futura o servidor recusa; sem ela, a sala sai dos registros
         acionarComConfirmacao("deleteRoom");
@@ -255,6 +279,58 @@ class ClienteGuiTest {
         assertJson(ultima("delete_room"), "op", "delete_room", "token", token, "room_id", "1");
         assertNull(banco.buscarSala(1));
         assertTrue(this.<TableView<JsonObject>>campo("tabelaSalas").getItems().isEmpty());
+    }
+
+    /**
+     * Botao "Cadastrar sala" clicado de verdade, com a aba rolada ate o cartao: o aviso de dados invalidos fica
+     * visivel (fora da area rolavel) e o "201" nao e trocado pelo retorno da listagem automatica que vem depois.
+     */
+    @Test
+    void botaoCadastrarSalaMostraORetornoAoUsuario() throws Exception {
+        iniciarServidorReal();
+        logar("admin@admin.com", "admin");
+        selecionarAba("Salas");
+        digitar("novaSalaNome", "Sala B12");
+        digitar("novaSalaCapacidade", "12");
+        digitar("novaSalaLocal", "Bloco B");
+        Button cadastrar = fx(() -> botao("Cadastrar sala (create_room)"));
+        Label retorno = campo("retornoSalas");
+        fx(() -> {
+            ScrollPane rolagem = (ScrollPane) palco.getScene().getRoot().lookupAll(".scroll-pane").stream()
+                    .filter(n -> n.isVisible() && n.getParent() != null && n.getParent().getChildrenUnmodifiable()
+                            .contains(retorno)).findFirst().orElseThrow();
+            rolagem.setVvalue(1.0);
+            return null;
+        });
+
+        // Sem horario marcado: nada e enviado e o aviso aparece fora da area rolavel
+        int antes = recebidas.size();
+        fx(() -> {
+            cadastrar.fire();
+            return null;
+        });
+        esperarRede();
+        assertEquals(antes, recebidas.size());
+        assertTrue(fx(retorno::isVisible));
+        assertTrue(retorno.getText().startsWith("Horarios: marque na grade pelo menos um horario"));
+        assertFalse(fx(() -> estaDentroDeScrollPane(retorno)));
+
+        // Marcando uma caixa da grade: create_room sai e o 201 continua na tela depois da listagem
+        fx(() -> {
+            GradeHorarios grade = campo("novaSalaHorarios");
+            grade.getChildren().stream().filter(n -> n instanceof CheckBox).map(n -> (CheckBox) n).findFirst()
+                    .orElseThrow().fire();
+            return null;
+        });
+        fx(() -> {
+            cadastrar.fire();
+            return null;
+        });
+        esperarRede();
+        assertEquals("[\"2M1\"]", ultima("create_room").get("slots").toString());
+        ultima("list_rooms");
+        assertEquals("201 - Sala cadastrada com sucesso", fx(retorno::getText));
+        assertEquals(List.of("Sala B12"), coluna("tabelaSalas", "name"));
     }
 
     @Test
@@ -440,6 +516,22 @@ class ClienteGuiTest {
              Statement st = c.createStatement()) {
             st.execute(comando);
         }
+    }
+
+    /** Botao da janela do cliente com o texto informado (chamar na thread da interface). */
+    private Button botao(String texto) {
+        return palco.getScene().getRoot().lookupAll(".button").stream()
+                .filter(n -> n instanceof Button b && b.getText().equals(texto)).map(n -> (Button) n)
+                .findFirst().orElseThrow();
+    }
+
+    private static boolean estaDentroDeScrollPane(javafx.scene.Node no) {
+        for (javafx.scene.Parent p = no.getParent(); p != null; p = p.getParent()) {
+            if (p instanceof ScrollPane) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private List<String> nomesDasAbas() throws Exception {

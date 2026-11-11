@@ -113,8 +113,9 @@ class InvasaoAdminTest {
         String cadastrado = "Usuario ou email ja cadastrado";
         assertResposta(intruso.registrar("admin", "outro@email.com", "senha123"), "register_response", "409", cadastrado);
         assertResposta(intruso.registrar("outro", "admin@admin.com", "senha123"), "register_response", "409", cadastrado);
-        // Maiusculas sao convertidas (regra 2.12): "ADMIN" e o mesmo user
-        assertResposta(intruso.registrar("ADMIN", "outro@email.com", "senha123"), "register_response", "409", cadastrado);
+        // Regra 2.12 (v2.9): maiusculas nao sao convertidas, a regex reprova (400)
+        assertResposta(intruso.registrar("ADMIN", "outro@email.com", "senha123"), "register_response", "400",
+                "Dados de cadastro em formato invalido");
         assertResposta(intruso.enviar("{\"op\":\"update_user\",\"token\":\"" + tokenIntruso
                 + "\",\"user\":\"admin\",\"password\":\"\"}"), "update_user_response", "409", "Usuario ja esta em uso");
         // Senha errada do admin
@@ -137,7 +138,8 @@ class InvasaoAdminTest {
     /** Tokens ausentes, forjados ou em formato malicioso nunca liberam a operacao. */
     @Test
     void tokensFalsosOuMalFormados() throws Exception {
-        assertResposta(intruso.enviar("{\"op\":\"admin_list_users\"}"), "admin_list_users_response", "401", TOKEN_INVALIDO);
+        // Regra 4.2 (v2.9.1): token ausente -> 400 "Token em formato invalido"
+        assertResposta(intruso.enviar("{\"op\":\"admin_list_users\"}"), "admin_list_users_response", "400", "Token em formato invalido");
         assertResposta(intruso.comToken("admin_list_users", TOKEN_FORJADO), "admin_list_users_response", "401", TOKEN_INVALIDO);
         assertResposta(intruso.comToken("admin_list_users", ""), "admin_list_users_response", "400", "Token em formato invalido");
         assertResposta(intruso.comToken("admin_list_users", tokenAdmin.toUpperCase()),
@@ -221,13 +223,11 @@ class InvasaoAdminTest {
                 "list_rooms_response", "400", "Filtros em formato invalido");
         assertResposta(admin.enviar("{\"op\":\"list_reservations\",\"token\":\"" + tokenAdmin + "\",\"scope\":\"all' --\"}"),
                 "list_reservations_response", "400", "Filtros em formato invalido");
-        // Um recurso com aspas e so texto: gravado e devolvido como veio, sem efeito no banco
+        // Regra 9.7 (v2.9): recurso fora da regex (aspas, ponto e virgula) e recusado e nada e gravado
         assertResposta(admin.enviar("{\"op\":\"create_room\",\"token\":\"" + tokenAdmin + "\",\"name\":\"Sala Q\","
                         + "\"capacity\":\"5\",\"location\":\"B\",\"resources\":[\"tv'); DROP TABLE salas;--\"],\"slots\":[\"2M1\"]}"),
-                "create_room_response", "201", "Sala cadastrada com sucesso");
-        assertEquals("[\"tv'); DROP TABLE salas;--\"]", admin.enviar("{\"op\":\"read_room\",\"token\":\"" + tokenAdmin
-                + "\",\"room_id\":\"2\"}").get("resources").toString());
-        assertEquals("2", admin.comToken("list_rooms", tokenAdmin).get("count").getAsString());
+                "create_room_response", "400", DADOS_SALA);
+        assertEquals("1", admin.comToken("list_rooms", tokenAdmin).get("count").getAsString());
         assertEquals("2", admin.comToken("admin_list_users", tokenAdmin).get("count").getAsString());
     }
 
@@ -295,7 +295,7 @@ class InvasaoAdminTest {
     void ultimoAdminNaoSaiPorNenhumCaminho() throws Exception {
         assertResposta(admin.enviar("{\"op\":\"delete_user\",\"token\":\"" + tokenAdmin + "\",\"password\":\"admin\"}"),
                 "delete_user_response", "403", "Nao e possivel remover o ultimo administrador");
-        assertResposta(admin.enviar("{\"op\":\"admin_delete_user\",\"token\":\"" + tokenAdmin + "\",\"target_user\":\"ADMIN\"}"),
+        assertResposta(admin.enviar("{\"op\":\"admin_delete_user\",\"token\":\"" + tokenAdmin + "\",\"target_user\":\"admin\"}"),
                 "admin_delete_user_response", "403", "Nao e possivel remover o ultimo administrador");
         assertResposta(admin.enviar(rebaixar(tokenAdmin, "admin")),
                 "admin_update_user_response", "403", "Nao e possivel remover o ultimo administrador");
