@@ -41,11 +41,16 @@ Regras de consulta:
 - **Duas listas de tokens** (`ListasTokens`): usuários comuns e administradores. Todo token é validado por elas; só a lista de admin (whitelist da regra 3.14) libera as operações de admin. As contas ficam numa única tabela `usuarios` com `role`, então o `register` recusa (409) email ou user já usado por um usuário comum ou por um admin.
 - **Horários das salas (protocolo 2.8.0, seção 8).** O antigo campo `schedule` (extensão do projeto) foi substituído pelo `slots` oficial, no código da UTFPR (`2M1`). Bancos com a tabela antiga `sala_horarios` são convertidos para `sala_slots` ao abrir. O cliente aceita resposta sem `slots` (servidores dos colegas ainda na versão anterior).
 
+- **Admin inicial x regra 3.15 (v2.9).** A v2.9 diz que, se já houver conta com user `admin` ou email `admin@admin.com` sem ser admin, o servidor não cria nem promove ninguém (só registra aviso). Mantida a decisão acima (promover/apagar), mais forte.
+- **Queda de conexão x regra 3.4 (v2.9.1).** A 3.4 diz que só logout, expiração e remoção da conta encerram sessão. Mantida a decisão "queda de conexão = logout".
+
+### Pontos que eram decisões nossas e o protocolo 2.9 passou a definir (implementado em 2026-11-11)
+- `update_room` com `capacity` abaixo dos `participants` de reserva ativa → 409 "Capacidade menor que participantes de reservas ativas" (regra 9.6; antes usávamos "Sala possui reservas ativas").
+- `delete_room` apaga junto as reservas encerradas (regra 9.8); reserva ativa = `date` + `end_time` ainda não passou (9.1).
+- Data inexistente no calendário → 400 com a message da operação (9.2), inclusive no `list_reservations`; consultas aceitam data passada (9.4).
+- Token ausente → **400** com a message de formato da operação; "Token em formato invalido" em `logout`, `read_user`, `admin_list_users` e `delete_user` (regras 2.10 e 4.2; antes respondíamos 401).
+
 ### Pontos que o protocolo não define (decididos com o usuário)
-- `update_room` reduzindo `capacity` abaixo dos `participants` de uma reserva futura → 409 "Sala possui reservas ativas" (pendência 3 do protocolo).
-- `delete_room` apaga junto as reservas **passadas** e os horários da sala; reserva ativa = `date` + `end_time` ainda não passou.
-- `list_rooms` e `read_room`: o `date` também precisa existir no calendário (`2026-02-30` → 400 com a mensagem da operação). Data passada é aceita nas consultas (só a reserva recusa data passada).
-- Token ausente → 401 (pendência 1 do protocolo).
 - **A revisar:** nome de sala "único" com comparação exata ("Sala A" ≠ "sala a"), como está descrito no protocolo.
 
 ### Drive antigo (SD-BCC) — só quando o usuário pedir
@@ -83,7 +88,7 @@ Condições obrigatórias da avaliação:
 ## Entrega-Parcial-02
 Dividida em duas partes:
 - **EP-2.1 — Administradores.** Status: implementada e commitada (`1a89147`, 2026-11-04). Login, `admin_list_users` e `admin_read_user` conferidos na interface; falta conferir update, delete e os erros.
-- **EP-2.2 — Salas.** Status: implementada (2026-11-04, commit `8f1fa30`); atualizada para o protocolo 2.8.0 em 2026-11-05 (`slots` no código da UTFPR, horários da tabela de aulas e agenda do `read_room`), aguardando teste nas interfaces e commit. Inclui as tabelas `salas`, `sala_slots` e `reservas` e o `list_reservations` (só leitura); `create_reservation`, `check_availability` e as demais operações de reserva ficam para a entrega seguinte (hoje respondem "Operacao desconhecida"), e a validação pela tabela de aulas já está pronta em `comum/Horarios`. No cliente, a aba Salas só aparece para admin (no servidor, `list_rooms` e `read_room` valem para qualquer usuário logado).
+- **EP-2.2 — Salas.** Status: implementada (2026-11-04, commit `8f1fa30`); atualizada para o protocolo 2.8.0 em 2026-11-05 (`slots` no código da UTFPR, horários da tabela de aulas e agenda do `read_room`, commit `7f35b10`) e para o **2.9.1 em 2026-11-11** (token ausente 400, maiúsculas 400 sem conversão, email ≤ 100, `resources` `[]`/`["0"]` e "Nenhum dado para atualizar" no `update_room`, 409 de capacidade, respostas sem limite de tamanho no cliente, commit `87d8eb0`). Demonstração visual das duas interfaces: `DemoEp2` (pasta de testes). Inclui as tabelas `salas`, `sala_slots` e `reservas` e o `list_reservations` (só leitura); `create_reservation`, `check_availability` e as demais operações de reserva ficam para a entrega seguinte (hoje respondem "Operacao desconhecida"), e a validação pela tabela de aulas já está pronta em `comum/Horarios`. No cliente, a aba Salas só aparece para admin (no servidor, `list_rooms` e `read_room` valem para qualquer usuário logado).
 
 Itens avaliados:
 
